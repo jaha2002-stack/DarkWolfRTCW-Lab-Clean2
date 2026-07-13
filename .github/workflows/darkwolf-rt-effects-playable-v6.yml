@@ -48,7 +48,8 @@ jobs:
             'RUN_RT_ALL_PERFORMANCE.bat',
             'RUN_RT_ALL_BALANCED_ESCAPE1_TEST.bat',
             'RUN_RT_DISABLE_V6.bat',
-            'VERIFY_RT_PLAYABLE_V6_INSTALL.bat'
+            'VERIFY_RT_PLAYABLE_V6_INSTALL.bat',
+            'RUN_RT_V61_DEBUG_COMPONENTS.bat'
           )
           foreach ($bat in $bats) { Copy-Item (Join-Path 'test-bats' $bat) dist/ -Force }
           Get-ChildItem main -Filter 'dxr_v6_*.cfg' -File | ForEach-Object { Copy-Item $_.FullName dist/main/ -Force }
