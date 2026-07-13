@@ -1162,6 +1162,9 @@ static glRaytracingEffectsOptions_t RB_BuildDXREffectsOptions(void)
 {
 	static uint32_t s_dxrEffectsFrameIndex = 0;
 	glRaytracingEffectsOptions_t o = {};
+	const qboolean fallbackDiagnosticActive =
+		r_dxrDebug && r_dxrDebug->integer &&
+		r_dxrFallbackLight && r_dxrFallbackLight->integer;
 
 	o.shadowsEnabled = r_dxrShadows ? (uint32_t)(r_dxrShadows->integer != 0) : 1u;
 	o.shadowStrength = r_dxrShadowStrength ? r_dxrShadowStrength->value : 1.0f;
@@ -1185,7 +1188,12 @@ static glRaytracingEffectsOptions_t RB_BuildDXREffectsOptions(void)
 	o.sunColor[2] = r_dxrSunColorB ? r_dxrSunColorB->value : 0.82f;
 	o.sunColor[3] = 1.0f;
 
-	o.dynamicLightsEnabled = r_dxrDynamicLights ? (uint32_t)(r_dxrDynamicLights->integer != 0) : 1u;
+	// A requested diagnostics-only fallback light must remain testable even
+	// when the user previously disabled r_dxrDynamicLights. Normal gameplay
+	// still follows the real r_dxrDynamicLights cvar exactly.
+	o.dynamicLightsEnabled = fallbackDiagnosticActive
+		? 1u
+		: (r_dxrDynamicLights ? (uint32_t)(r_dxrDynamicLights->integer != 0) : 1u);
 	o.dynamicLightShadows = r_dxrDynamicLightShadows ? (uint32_t)(r_dxrDynamicLightShadows->integer != 0) : 1u;
 	o.maxLights = r_dxrMaxLights ? (uint32_t)r_dxrMaxLights->integer : 16u;
 	o.dynamicLightIntensityScale = r_dxrDynamicLightIntensityScale ? r_dxrDynamicLightIntensityScale->value : 1.0f;
@@ -1263,6 +1271,7 @@ static glRaytracingEffectsOptions_t RB_BuildDXREffectsOptions(void)
 static void RB_RunRaytracedLightingPass(void)
 {
 	static int s_lastDXRDebugPrintTime = 0;
+	qboolean printDXRDebugConstants = qfalse;
 
 	if (backEnd.raytraceRendered || !RB_DXRShouldRenderLighting())
 	{
@@ -1334,6 +1343,7 @@ static void RB_RunRaytracedLightingPass(void)
 		if (now - s_lastDXRDebugPrintTime > 1000)
 		{
 			s_lastDXRDebugPrintTime = now;
+			printDXRDebugConstants = qtrue;
 			ri.Printf(PRINT_ALL,
 				"DXR v6: meshes=%u instances=%u lights=%u selected=%u rejected=%u fallback=%d radius=%.1f intensity=%.2f bias=%.4f ambient=%.2f legacy=%.2f exposure=%.2f debugMode=%d\n",
 				glRaytracingGetMeshCount(),
@@ -1382,6 +1392,8 @@ static void RB_RunRaytracedLightingPass(void)
 	if (r_dxrCpuSync && r_dxrCpuSync->integer)
 		glFinish();
 	glLightScene();
+	if (printDXRDebugConstants)
+		glRaytracingLightingDebugPrintConstants();
 	glRaytracingLightingClearLights(false);
 }
 

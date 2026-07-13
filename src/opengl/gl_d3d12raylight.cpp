@@ -12,6 +12,7 @@ extern void __cdecl Com_Printf(const char* fmt, ...);
 #include <wrl/client.h>
 
 #include <stdint.h>
+#include <stddef.h>
 #include <vector>
 #include <thread>
 #include <atomic>
@@ -1726,6 +1727,112 @@ struct glRaytracingLightingConstants_t
 static_assert(sizeof(glRaytracingEffectsOptions_t) == 320, "DXR Playable v6 effects constants must stay cbuffer-compatible");
 static_assert(sizeof(glRaytracingLightingConstants_t) == 544, "DXR Playable v6 lighting constants layout changed");
 
+// Playable v6.1: byte-for-byte compile-time verification of the CPU side of
+// LightingCB. A total-size assertion alone cannot detect two same-sized fields
+// being reordered, which is exactly the class of failure that makes most debug
+// components read as zero while one scalar component still appears to work.
+#define GLR_ASSERT_EFFECT_OFFSET(member, expected) \
+	static_assert(offsetof(glRaytracingEffectsOptions_t, member) == (expected), \
+		"DXR v6.1 effects cbuffer offset mismatch: " #member)
+GLR_ASSERT_EFFECT_OFFSET(shadowsEnabled, 0);
+GLR_ASSERT_EFFECT_OFFSET(shadowStrength, 4);
+GLR_ASSERT_EFFECT_OFFSET(shadowSamples, 8);
+GLR_ASSERT_EFFECT_OFFSET(shadowSoftness, 12);
+GLR_ASSERT_EFFECT_OFFSET(shadowMaxDistance, 16);
+GLR_ASSERT_EFFECT_OFFSET(shadowCullMode, 20);
+GLR_ASSERT_EFFECT_OFFSET(contactShadows, 24);
+GLR_ASSERT_EFFECT_OFFSET(contactShadowLength, 28);
+GLR_ASSERT_EFFECT_OFFSET(sunEnabled, 32);
+GLR_ASSERT_EFFECT_OFFSET(sunIntensity, 36);
+GLR_ASSERT_EFFECT_OFFSET(sunAngularRadius, 40);
+GLR_ASSERT_EFFECT_OFFSET(sunSamples, 44);
+GLR_ASSERT_EFFECT_OFFSET(sunDirection, 48);
+GLR_ASSERT_EFFECT_OFFSET(sunColor, 64);
+GLR_ASSERT_EFFECT_OFFSET(dynamicLightsEnabled, 80);
+GLR_ASSERT_EFFECT_OFFSET(dynamicLightShadows, 84);
+GLR_ASSERT_EFFECT_OFFSET(maxLights, 88);
+GLR_ASSERT_EFFECT_OFFSET(dynamicLightIntensityScale, 92);
+GLR_ASSERT_EFFECT_OFFSET(dynamicLightRadiusScale, 96);
+GLR_ASSERT_EFFECT_OFFSET(aoEnabled, 100);
+GLR_ASSERT_EFFECT_OFFSET(aoSamples, 104);
+GLR_ASSERT_EFFECT_OFFSET(aoRadius, 108);
+GLR_ASSERT_EFFECT_OFFSET(aoStrength, 112);
+GLR_ASSERT_EFFECT_OFFSET(reflectionsEnabled, 116);
+GLR_ASSERT_EFFECT_OFFSET(reflectionSamples, 120);
+GLR_ASSERT_EFFECT_OFFSET(reflectionStrength, 124);
+GLR_ASSERT_EFFECT_OFFSET(reflectionMaxDistance, 128);
+GLR_ASSERT_EFFECT_OFFSET(reflectionRoughness, 132);
+GLR_ASSERT_EFFECT_OFFSET(giEnabled, 136);
+GLR_ASSERT_EFFECT_OFFSET(giSamples, 140);
+GLR_ASSERT_EFFECT_OFFSET(giStrength, 144);
+GLR_ASSERT_EFFECT_OFFSET(giMaxDistance, 148);
+GLR_ASSERT_EFFECT_OFFSET(denoiserEnabled, 152);
+GLR_ASSERT_EFFECT_OFFSET(denoiserRadius, 156);
+GLR_ASSERT_EFFECT_OFFSET(denoiserStrength, 160);
+GLR_ASSERT_EFFECT_OFFSET(denoiserDepthSigma, 164);
+GLR_ASSERT_EFFECT_OFFSET(denoiserNormalSigma, 168);
+GLR_ASSERT_EFFECT_OFFSET(temporalEnabled, 172);
+GLR_ASSERT_EFFECT_OFFSET(temporalWeight, 176);
+GLR_ASSERT_EFFECT_OFFSET(temporalClamp, 180);
+GLR_ASSERT_EFFECT_OFFSET(temporalResetThreshold, 184);
+GLR_ASSERT_EFFECT_OFFSET(skyEnabled, 188);
+GLR_ASSERT_EFFECT_OFFSET(skyStrength, 192);
+GLR_ASSERT_EFFECT_OFFSET(skySamples, 196);
+GLR_ASSERT_EFFECT_OFFSET(skyMaxDistance, 200);
+GLR_ASSERT_EFFECT_OFFSET(specularEnabled, 204);
+GLR_ASSERT_EFFECT_OFFSET(specularStrength, 208);
+GLR_ASSERT_EFFECT_OFFSET(specularPower, 212);
+GLR_ASSERT_EFFECT_OFFSET(shadowMinVisibility, 216);
+GLR_ASSERT_EFFECT_OFFSET(tonemapMode, 220);
+GLR_ASSERT_EFFECT_OFFSET(hdrWhitePoint, 224);
+GLR_ASSERT_EFFECT_OFFSET(bloomStrength, 228);
+GLR_ASSERT_EFFECT_OFFSET(bloomThreshold, 232);
+GLR_ASSERT_EFFECT_OFFSET(saturation, 236);
+GLR_ASSERT_EFFECT_OFFSET(contrast, 240);
+GLR_ASSERT_EFFECT_OFFSET(outputGamma, 244);
+GLR_ASSERT_EFFECT_OFFSET(frameIndex, 248);
+GLR_ASSERT_EFFECT_OFFSET(debugEffect, 252);
+GLR_ASSERT_EFFECT_OFFSET(directLightingStrength, 256);
+GLR_ASSERT_EFFECT_OFFSET(lightmapStrength, 260);
+GLR_ASSERT_EFFECT_OFFSET(aoLightmapStrength, 264);
+GLR_ASSERT_EFFECT_OFFSET(shadowLightmapStrength, 268);
+GLR_ASSERT_EFFECT_OFFSET(radianceClamp, 272);
+GLR_ASSERT_EFFECT_OFFSET(highlightCompression, 276);
+GLR_ASSERT_EFFECT_OFFSET(pointLightIntensityCap, 280);
+GLR_ASSERT_EFFECT_OFFSET(rectLightIntensityCap, 284);
+GLR_ASSERT_EFFECT_OFFSET(lightRadiusMin, 288);
+GLR_ASSERT_EFFECT_OFFSET(lightRadiusMax, 292);
+GLR_ASSERT_EFFECT_OFFSET(lightSelectionHysteresis, 296);
+GLR_ASSERT_EFFECT_OFFSET(lightSelectionMinScore, 300);
+GLR_ASSERT_EFFECT_OFFSET(temporalPositionThreshold, 304);
+GLR_ASSERT_EFFECT_OFFSET(temporalRotationThreshold, 308);
+GLR_ASSERT_EFFECT_OFFSET(temporalMaxFrames, 312);
+GLR_ASSERT_EFFECT_OFFSET(lightSelectionMode, 316);
+#undef GLR_ASSERT_EFFECT_OFFSET
+
+#define GLR_ASSERT_LIGHTING_OFFSET(member, expected) \
+	static_assert(offsetof(glRaytracingLightingConstants_t, member) == (expected), \
+		"DXR v6.1 LightingCB outer offset mismatch: " #member)
+GLR_ASSERT_LIGHTING_OFFSET(invViewProj, 0);
+GLR_ASSERT_LIGHTING_OFFSET(invViewMatrix, 64);
+GLR_ASSERT_LIGHTING_OFFSET(cameraPos, 128);
+GLR_ASSERT_LIGHTING_OFFSET(ambientColor, 144);
+GLR_ASSERT_LIGHTING_OFFSET(screenSize, 160);
+GLR_ASSERT_LIGHTING_OFFSET(normalReconstructZ, 176);
+GLR_ASSERT_LIGHTING_OFFSET(lightCount, 180);
+GLR_ASSERT_LIGHTING_OFFSET(enableSpecular, 184);
+GLR_ASSERT_LIGHTING_OFFSET(enableHalfLambert, 188);
+GLR_ASSERT_LIGHTING_OFFSET(shadowBias, 192);
+GLR_ASSERT_LIGHTING_OFFSET(exposure, 196);
+GLR_ASSERT_LIGHTING_OFFSET(legacyBlend, 200);
+GLR_ASSERT_LIGHTING_OFFSET(debugMode, 204);
+GLR_ASSERT_LIGHTING_OFFSET(effects, 208);
+GLR_ASSERT_LIGHTING_OFFSET(historyValid, 528);
+GLR_ASSERT_LIGHTING_OFFSET(passMode, 532);
+GLR_ASSERT_LIGHTING_OFFSET(padConstants0, 536);
+GLR_ASSERT_LIGHTING_OFFSET(padConstants1, 540);
+#undef GLR_ASSERT_LIGHTING_OFFSET
+
 struct glRaytracingLightingState_t
 {
 	std::vector<glRaytracingLight_t> cpuLights;
@@ -2317,6 +2424,15 @@ R"DXRHLSL(float Luminance(float3 color)
     return dot(color, float3(0.2126, 0.7152, 0.0722));
 }
 
+// Diagnostic-only visibility transform. It never participates in gameplay
+// compositing; it merely lifts low-energy RT components into a displayable
+// range while keeping zero exactly black and preserving component color.
+float3 DebugNormalizePositive(float3 color, float gain)
+{
+    color = max(color, 0.0);
+    return 1.0 - exp2(-color * max(gain, 0.001));
+}
+
 float3 ApplyRadianceGuard(float3 color)
 {
     color = max(color, 0.0);
@@ -2357,6 +2473,10 @@ float3 ApplyOutputPost(float3 color)
 
 bool NeedsResolvePass()
 {
+    // Component diagnostics must be byte-direct: no spatial filter, temporal
+    // history, HDR guard, bloom, tonemap, color grading or gamma conversion.
+    if (gDebugEffect != 0)
+        return false;
     return gDenoiserEnabled != 0 || gTemporalEnabled != 0 || gTonemapMode != 0 ||
         gBloomStrength > 0.0 || abs(gSaturation - 1.0) > 0.001 ||
         abs(gContrast - 1.0) > 0.001 || abs(gOutputGamma - 1.0) > 0.001;
@@ -2464,6 +2584,43 @@ void RayGen()
     if (pixel.x >= (uint)gScreenSize.x || pixel.y >= (uint)gScreenSize.y)
         return;
 
+    // Modes 10-12 validate the entire descriptor -> shader -> UAV -> game
+    // composite chain without depending on scene textures or ray queries.
+    if (gDebugEffect == 10)
+    {
+        gOutputTex[pixel] = float4(1.0, 0.0, 0.0, 1.0);
+        return;
+    }
+    if (gDebugEffect == 11)
+    {
+        gOutputTex[pixel] = float4(0.0, 1.0, 0.0, 1.0);
+        return;
+    }
+    if (gDebugEffect == 12)
+    {
+        gOutputTex[pixel] = float4(0.0, 0.0, 1.0, 1.0);
+        return;
+    }
+
+    // Mode 3 is deliberately independent of geometry. It is a direct probe of
+    // the actual sun fields received by the HLSL constant buffer.
+    if (gDebugEffect == 3)
+    {
+        float3 sunProbe = (gSunEnabled != 0)
+            ? saturate(max(gSunColor.rgb, 0.0) * max(gSunIntensity, 0.0))
+            : float3(0.0, 0.0, 0.0);
+        gOutputTex[pixel] = float4(sunProbe, 1.0);
+        return;
+    }
+
+    // Mode 8 is the exact source texture sample. It bypasses lightmap strength,
+    // legacy blend, exposure and every post-processing stage.
+    if (gDebugEffect == 8)
+    {
+        gOutputTex[pixel] = gAlbedoTex.Load(int3(pixel, 0));
+        return;
+    }
+
     if (gPassMode != 0)
     {
         gOutputTex[pixel] = ResolveLabPixel(pixel);
@@ -2474,6 +2631,12 @@ void RayGen()
     float depthSample = gDepthTex.Load(int3(pixel, 0));
     if (depthSample <= 0.0 || depthSample >= 1.0)
     {
+        if (gDebugEffect != 0)
+        {
+            float maskBackground = (gDebugEffect == 1 || gDebugEffect == 2 || gDebugEffect == 9) ? 1.0 : 0.0;
+            gOutputTex[pixel] = float4(maskBackground.xxx, albedoSample.a);
+            return;
+        }
         float3 background = NeedsResolvePass() ? albedoSample.rgb : ApplyOutputPost(albedoSample.rgb);
         gOutputTex[pixel] = float4(background, albedoSample.a);
         return;
@@ -2590,7 +2753,8 @@ void RayGen()
         }
     }
 
-    float3 shadowedLighting = lightingAccum;
+)DXRHLSL",
+R"DXRHLSL(    float3 shadowedLighting = lightingAccum;
     float3 unshadowedLighting = max(lightingUnshadowedAccum, 0.0);
     lightingAccum *= ao;
     specularAccum *= lerp(1.0, ao, 0.45);
@@ -2603,6 +2767,35 @@ void RayGen()
     float3 reflection = ComputeReflection(worldPos, N, V, pixel);
     float3 gi = ComputeGI(worldPos, N, baseAlbedo, pixel);
 
+    float shadowedLuma = Luminance(max(shadowedLighting, 0.0));
+    float unshadowedLuma = max(Luminance(unshadowedLighting), 1e-4);
+    float shadowRatio = saturate(shadowedLuma / unshadowedLuma);
+    float3 directDiffuse = albedo * lightingAccum * max(gDirectLightingStrength, 0.0);
+
+    // Direct component diagnostics. These outputs are returned immediately and
+    // never enter spatial/temporal filtering, HDR limiting, bloom, tonemap or
+    // color grading. Weak radiometric components are visualized only here.
+    if (gDebugEffect != 0)
+    {
+        float3 debugColor = 0.0;
+        if (gDebugEffect == 1)
+            debugColor = debugShadow.xxx;
+        else if (gDebugEffect == 2)
+            debugColor = ao.xxx;
+        else if (gDebugEffect == 4)
+            debugColor = DebugNormalizePositive(reflection, 24.0);
+        else if (gDebugEffect == 5)
+            debugColor = DebugNormalizePositive(gi, 24.0);
+        else if (gDebugEffect == 6)
+            debugColor = DebugNormalizePositive(directDiffuse, 4.0);
+        else if (gDebugEffect == 7)
+            debugColor = DebugNormalizePositive(specularAccum, 16.0);
+        else if (gDebugEffect == 9)
+            debugColor = shadowRatio.xxx;
+        gOutputTex[pixel] = float4(saturate(debugColor), albedoSample.a);
+        return;
+    }
+
     float3 finalColor;
     if (geoFlag == GEOMETRY_FLAG_UNLIT)
     {
@@ -2614,9 +2807,6 @@ void RayGen()
         // specular, AO, sky/reflections and GI are mixed as independent
         // components instead of treating the already-lit framebuffer as raw
         // material albedo.  This avoids the v5 exposure pumping.
-        float shadowedLuma = Luminance(max(shadowedLighting, 0.0));
-        float unshadowedLuma = max(Luminance(unshadowedLighting), 1e-4);
-        float shadowRatio = saturate(shadowedLuma / unshadowedLuma);
         float directPresence = saturate(unshadowedLuma * 0.35);
         float legacyShadow = lerp(1.0, max(shadowRatio, gShadowMinVisibility),
             saturate(gShadowLightmapStrength) * directPresence);
@@ -2624,7 +2814,6 @@ void RayGen()
 
         float3 legacyColor = baseAlbedo * max(gLightmapStrength, 0.0) *
             saturate(gLegacyBlend) * legacyShadow * legacyAO;
-        float3 directDiffuse = albedo * lightingAccum * max(gDirectLightingStrength, 0.0);
         float3 rtLitColor = directDiffuse + specularAccum + reflection + gi;
         finalColor = (legacyColor + rtLitColor) * max(gExposure, 0.001);
         finalColor = ApplyRadianceGuard(finalColor);
@@ -2638,25 +2827,6 @@ R"DXRHLSL(            finalColor = (ao * skyVisibility).xxx;
             finalColor = baseAlbedo;
         else if (gDebugMode == 4)
             finalColor = lightingAccum / (1.0 + lightingAccum);
-
-        if (gDebugEffect == 1)
-            finalColor = debugShadow.xxx;
-        else if (gDebugEffect == 2)
-            finalColor = ao.xxx;
-        else if (gDebugEffect == 3)
-            finalColor = (gSunEnabled != 0 ? gSunColor.rgb * gSunIntensity : 0.0);
-        else if (gDebugEffect == 4)
-            finalColor = reflection;
-        else if (gDebugEffect == 5)
-            finalColor = gi;
-        else if (gDebugEffect == 6)
-            finalColor = directDiffuse;
-        else if (gDebugEffect == 7)
-            finalColor = specularAccum;
-        else if (gDebugEffect == 8)
-            finalColor = legacyColor;
-        else if (gDebugEffect == 9)
-            finalColor = shadowRatio.xxx;
     }
 
     if (!NeedsResolvePass())
@@ -3650,6 +3820,7 @@ void glRaytracingLightingSetEffectsOptions(const glRaytracingEffectsOptions_t* o
 		return;
 
 	const uint32_t oldTemporal = g_glRaytracingLighting.constants.effects.temporalEnabled;
+	const uint32_t oldDebugEffect = g_glRaytracingLighting.constants.effects.debugEffect;
 	glRaytracingEffectsOptions_t o = *options;
 
 	o.shadowsEnabled = o.shadowsEnabled ? 1u : 0u;
@@ -3728,11 +3899,13 @@ void glRaytracingLightingSetEffectsOptions(const glRaytracingEffectsOptions_t* o
 	o.temporalRotationThreshold = glRaytracingClamp(o.temporalRotationThreshold, 0.0f, 1.0f);
 	o.temporalMaxFrames = glRaytracingClamp<uint32_t>(o.temporalMaxFrames, 0u, 1024u);
 	o.lightSelectionMode = glRaytracingClamp<uint32_t>(o.lightSelectionMode, 0u, 1u);
-	o.debugEffect = glRaytracingClamp(o.debugEffect, 0u, 9u);
+	o.debugEffect = glRaytracingClamp(o.debugEffect, 0u, 12u);
 
 	g_glRaytracingLighting.constants.effects = o;
-	if (!o.temporalEnabled || oldTemporal != o.temporalEnabled)
+	if (!o.temporalEnabled || oldTemporal != o.temporalEnabled || oldDebugEffect != o.debugEffect)
 	{
+		// Any component-view switch invalidates history immediately. This keeps
+		// the previous component from leaking into the next diagnostic frame.
 		g_glRaytracingLighting.historyValid = 0;
 		g_glRaytracingLighting.temporalHistoryAge = 0;
 	}
@@ -3839,14 +4012,16 @@ bool glRaytracingLightingExecute(const glRaytracingLightingPassDesc_t* pass)
 		g_glRaytracingLighting.historyValid = 0;
 		g_glRaytracingLighting.temporalHistoryAge = 0;
 	}
-	const bool needsResolve =
+	// Debug components are written straight to the final output. Do not allocate
+	// or execute the resolve path while a component probe is active.
+	const bool needsResolve = effects.debugEffect == 0 && (
 		effects.denoiserEnabled != 0 ||
 		effects.temporalEnabled != 0 ||
 		effects.tonemapMode != 0 ||
 		effects.bloomStrength > 0.0f ||
 		fabsf(effects.saturation - 1.0f) > 0.001f ||
 		fabsf(effects.contrast - 1.0f) > 0.001f ||
-		fabsf(effects.outputGamma - 1.0f) > 0.001f;
+		fabsf(effects.outputGamma - 1.0f) > 0.001f);
 
 	if (needsResolve && !glRaytracingLightingEnsureLabTextures(pass))
 		return false;
@@ -4057,6 +4232,25 @@ uint32_t glRaytracingLightingGetSelectedLightCount(void)
 uint32_t glRaytracingLightingGetRejectedLightCount(void)
 {
 	return g_glRaytracingLighting.rejectedLightCount;
+}
+
+void glRaytracingLightingDebugPrintConstants(void)
+{
+	const glRaytracingLightingConstants_t& c = g_glRaytracingLighting.constants;
+	const glRaytracingEffectsOptions_t& e = c.effects;
+	Com_Printf(
+		"DXR v6.1 CPU CB: sun=%u intensity=%.4f color=(%.3f %.3f %.3f) "
+		"AO=%u strength=%.4f radius=%.2f GI=%u strength=%.4f maxDist=%.2f "
+		"refl=%u strength=%.4f maxDist=%.2f debugEffect=%u dyn=%u "
+		"lightCount=%u selected=%u rejected=%u history=%u\n",
+		e.sunEnabled, e.sunIntensity, e.sunColor[0], e.sunColor[1], e.sunColor[2],
+		e.aoEnabled, e.aoStrength, e.aoRadius,
+		e.giEnabled, e.giStrength, e.giMaxDistance,
+		e.reflectionsEnabled, e.reflectionStrength, e.reflectionMaxDistance,
+		e.debugEffect, e.dynamicLightsEnabled, c.lightCount,
+		g_glRaytracingLighting.selectedLightCount,
+		g_glRaytracingLighting.rejectedLightCount,
+		g_glRaytracingLighting.historyValid ? 1u : 0u);
 }
 
 glRaytracingLight_t glRaytracingLightingMakePointLight(

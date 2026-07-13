@@ -1844,6 +1844,7 @@ glRaytracingLight_t        glRaytracingLightingMakeRectLight(
 uint32_t                   glRaytracingLightingGetLightCount(void);
 uint32_t                   glRaytracingLightingGetSelectedLightCount(void);
 uint32_t                   glRaytracingLightingGetRejectedLightCount(void);
+void                       glRaytracingLightingDebugPrintConstants(void);
 
 void                       glLightScene(void);
 
