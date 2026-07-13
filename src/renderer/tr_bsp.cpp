@@ -406,12 +406,21 @@ static void TryAddRectLightFromFace(const dsurface_t* ds, msurface_t* surf, srfS
 	center[1] += normal[1] * 1.0f;
 	center[2] += normal[2] * 1.0f;
 
-	// Very basic color/intensity guess
-	// Later you can drive this from shader parms or emissive stages.
+	// Preserve the authored shader tint where the stage provides a constant
+	// color.  RTCW's old "light" values are deliberately left in their source
+	// range here; Playable v6 normalizes them logarithmically during per-frame
+	// light selection so a value such as 300 cannot blow out the HDR resolve.
+	shaderStage_t* emissiveStage = surf->shader->stages[0];
 	float r = 1.0f;
-	float g = 0.9f;
-	float b = 0.7f;
-	float intensity = surf->shader->stages[0]->bundle[0].light;
+	float g = 0.82f;
+	float b = 0.58f;
+	if (emissiveStage && emissiveStage->rgbGen == CGEN_CONST)
+	{
+		r = emissiveStage->constantColor[0] * (1.0f / 255.0f);
+		g = emissiveStage->constantColor[1] * (1.0f / 255.0f);
+		b = emissiveStage->constantColor[2] * (1.0f / 255.0f);
+	}
+	float intensity = emissiveStage ? emissiveStage->bundle[0].light : 0.0f;
 
 	glRaytracingLight_t light = glRaytracingLightingMakeRectLight(
 		center[0], center[1], center[2],
@@ -421,8 +430,8 @@ static void TryAddRectLightFromFace(const dsurface_t* ds, msurface_t* surf, srfS
 		halfWidth, halfHeight,
 		r, g, b,
 		intensity,
-		4,      // samples
-		0       // twoSided
+		1,      // Playable v6 starts at one sample; spatial/temporal filtering stabilizes it
+		(surf->shader->cullType == CT_TWO_SIDED) ? 1u : 0u
 	);
 
 	// Optional: override influence radius used for falloff
@@ -1670,6 +1679,9 @@ static void R_LoadSubmodels( lump_t *l ) {
 		out->firstSurface = s_worldData.surfaces + LittleLong( in->firstSurface );
 		out->numSurfaces = LittleLong( in->numSurfaces );
 		out->dxrMesh.cachedFrame = -1;
+		for ( j = 0; j < MAX_DXR_SURFACES; ++j ) {
+			out->dxrMesh.dxrSurfaces[j].cachedFrame = -1;
+		}
 	}
 }
 

@@ -997,11 +997,6 @@ void RB_UpdateDXRMesh(trDXRMesh_t* mesh, int currentFrame, int surfaceId, int st
 		return;
 	}
 
-	if (mesh->cachedFrame == currentFrame)
-	{
-		return;
-	}
-
 	if (surfaceId < 0 || surfaceId >= MAX_DXR_SURFACES)
 	{
 		return;
@@ -1035,6 +1030,15 @@ void RB_UpdateDXRMesh(trDXRMesh_t* mesh, int currentFrame, int surfaceId, int st
 
 	trDXRSurface_t* surf = &mesh->dxrSurfaces[surfaceId];
 
+	// Deduplicate per surface, not per brush model. The previous whole-mesh
+	// shortcut dropped every surface after the first one and removed thin
+	// shadow casters such as iron doors, grilles and torch brackets.
+	if (surf->cachedFrame == currentFrame)
+	{
+		return;
+	}
+	surf->cachedFrame = currentFrame;
+
 	std::vector<glRaytracingVertex_t> vertices(vertexCount);
 	std::vector<uint32_t> indices(indexCount);
 
@@ -1044,6 +1048,13 @@ void RB_UpdateDXRMesh(trDXRMesh_t* mesh, int currentFrame, int surfaceId, int st
 		vertices[i].xyz[0] = tess.xyz[srcVert][0];
 		vertices[i].xyz[1] = tess.xyz[srcVert][1];
 		vertices[i].xyz[2] = tess.xyz[srcVert][2];
+
+		vertices[i].normal[0] = tess.normal[srcVert][0];
+		vertices[i].normal[1] = tess.normal[srcVert][1];
+		vertices[i].normal[2] = tess.normal[srcVert][2];
+
+		vertices[i].st[0] = tess.texCoords[srcVert][0][0];
+		vertices[i].st[1] = tess.texCoords[srcVert][0][1];
 	}
 
 	for (int i = 0; i < indexCount; ++i)
@@ -1057,6 +1068,8 @@ void RB_UpdateDXRMesh(trDXRMesh_t* mesh, int currentFrame, int surfaceId, int st
 	desc.vertexCount = (uint32_t)vertexCount;
 	desc.indices = indices.data();
 	desc.indexCount = (uint32_t)indexCount;
+	desc.allowUpdate = qtrue;
+	desc.opaque = qtrue;
 
 	if (!surf->dxrMeshHandle)
 	{
@@ -1071,7 +1084,6 @@ void RB_UpdateDXRMesh(trDXRMesh_t* mesh, int currentFrame, int surfaceId, int st
 		}
 	}
 
-	mesh->cachedFrame = currentFrame;
 }
 
 /*
@@ -1088,6 +1100,289 @@ void RB_UpdateDrawSurfFlags(drawSurf_t* surf, shader_t *shader)
 	if (shader->stages[0] != NULL && shader->stages[0]->bundle != NULL && shader->stages[0]->bundle[0].light > 0) {
 		glGeometryFlagf(GEOMETRY_FLAG_UNLIT);
 	}
+}
+
+static qboolean RB_DXRShouldRenderLighting(void)
+{
+	if (r_dxr && !r_dxr->integer)
+	{
+		return qfalse;
+	}
+
+	if (backEnd.refdef.rdflags & RDF_SKYBOXPORTAL)
+	{
+		return qfalse;
+	}
+
+	if (!glRaytracingLightingIsInitialized())
+	{
+		return qfalse;
+	}
+
+	if (glRaytracingHasDeviceLost())
+	{
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+static void RB_AddDXRFallbackLightIfNeeded(void)
+{
+	// The camera-attached fallback light is a diagnostics-only tool.  It must
+	// never enter a normal gameplay profile because it moves with the camera
+	// and creates the extreme exposure pumping seen in the v5 tests.
+	if (!r_dxrFallbackLight || !r_dxrFallbackLight->integer ||
+		!r_dxrDebug || !r_dxrDebug->integer)
+	{
+		return;
+	}
+
+	const float radius = (r_dxrFallbackLightRadius && r_dxrFallbackLightRadius->value > 1.0f)
+		? r_dxrFallbackLightRadius->value
+		: 900.0f;
+	const float intensity = (r_dxrFallbackLightIntensity && r_dxrFallbackLightIntensity->value > 0.0f)
+		? r_dxrFallbackLightIntensity->value
+		: 6.0f;
+
+	vec3_t lightOrg;
+	VectorCopy(backEnd.refdef.vieworg, lightOrg);
+	VectorMA(lightOrg, 128.0f, backEnd.refdef.viewaxis[0], lightOrg);
+	VectorMA(lightOrg, 72.0f, backEnd.refdef.viewaxis[2], lightOrg);
+
+	glRaytracingLight_t light = glRaytracingLightingMakePointLight(
+		lightOrg[0], lightOrg[1], lightOrg[2],
+		radius,
+		1.00f, 0.96f, 0.90f,
+		intensity);
+	glRaytracingLightingAddLight(&light);
+}
+
+static glRaytracingEffectsOptions_t RB_BuildDXREffectsOptions(void)
+{
+	static uint32_t s_dxrEffectsFrameIndex = 0;
+	glRaytracingEffectsOptions_t o = {};
+
+	o.shadowsEnabled = r_dxrShadows ? (uint32_t)(r_dxrShadows->integer != 0) : 1u;
+	o.shadowStrength = r_dxrShadowStrength ? r_dxrShadowStrength->value : 1.0f;
+	o.shadowSamples = r_dxrShadowSamples ? (uint32_t)r_dxrShadowSamples->integer : 2u;
+	o.shadowSoftness = r_dxrShadowSoftness ? r_dxrShadowSoftness->value : 0.75f;
+	o.shadowMaxDistance = r_dxrShadowMaxDistance ? r_dxrShadowMaxDistance->value : 4096.0f;
+	o.shadowCullMode = r_dxrShadowCullMode ? (uint32_t)r_dxrShadowCullMode->integer : 0u;
+	o.contactShadows = r_dxrContactShadows ? (uint32_t)(r_dxrContactShadows->integer != 0) : 1u;
+	o.contactShadowLength = r_dxrContactShadowLength ? r_dxrContactShadowLength->value : 96.0f;
+
+	o.sunEnabled = r_dxrSun ? (uint32_t)(r_dxrSun->integer != 0) : 0u;
+	o.sunIntensity = r_dxrSunIntensity ? r_dxrSunIntensity->value : 1.25f;
+	o.sunAngularRadius = r_dxrSunAngularRadius ? r_dxrSunAngularRadius->value : 0.35f;
+	o.sunSamples = r_dxrSunShadowSamples ? (uint32_t)r_dxrSunShadowSamples->integer : 2u;
+	o.sunDirection[0] = r_dxrSunDirX ? r_dxrSunDirX->value : -0.45f;
+	o.sunDirection[1] = r_dxrSunDirY ? r_dxrSunDirY->value : 0.25f;
+	o.sunDirection[2] = r_dxrSunDirZ ? r_dxrSunDirZ->value : 0.86f;
+	o.sunDirection[3] = 0.0f;
+	o.sunColor[0] = r_dxrSunColorR ? r_dxrSunColorR->value : 1.0f;
+	o.sunColor[1] = r_dxrSunColorG ? r_dxrSunColorG->value : 0.93f;
+	o.sunColor[2] = r_dxrSunColorB ? r_dxrSunColorB->value : 0.82f;
+	o.sunColor[3] = 1.0f;
+
+	o.dynamicLightsEnabled = r_dxrDynamicLights ? (uint32_t)(r_dxrDynamicLights->integer != 0) : 1u;
+	o.dynamicLightShadows = r_dxrDynamicLightShadows ? (uint32_t)(r_dxrDynamicLightShadows->integer != 0) : 1u;
+	o.maxLights = r_dxrMaxLights ? (uint32_t)r_dxrMaxLights->integer : 16u;
+	o.dynamicLightIntensityScale = r_dxrDynamicLightIntensityScale ? r_dxrDynamicLightIntensityScale->value : 1.0f;
+	o.dynamicLightRadiusScale = r_dxrDynamicLightRadiusScale ? r_dxrDynamicLightRadiusScale->value : 1.0f;
+
+	o.aoEnabled = r_dxrAO ? (uint32_t)(r_dxrAO->integer != 0) : 0u;
+	o.aoSamples = r_dxrAOSamples ? (uint32_t)r_dxrAOSamples->integer : 4u;
+	o.aoRadius = r_dxrAORadius ? r_dxrAORadius->value : 24.0f;
+	o.aoStrength = r_dxrAOStrength ? r_dxrAOStrength->value : 0.45f;
+
+	o.reflectionsEnabled = r_dxrReflections ? (uint32_t)(r_dxrReflections->integer != 0) : 0u;
+	o.reflectionSamples = r_dxrReflectionSamples ? (uint32_t)r_dxrReflectionSamples->integer : 1u;
+	o.reflectionStrength = r_dxrReflectionStrength ? r_dxrReflectionStrength->value : 0.18f;
+	o.reflectionMaxDistance = r_dxrReflectionMaxDistance ? r_dxrReflectionMaxDistance->value : 1536.0f;
+	o.reflectionRoughness = r_dxrReflectionRoughness ? r_dxrReflectionRoughness->value : 0.35f;
+
+	o.giEnabled = r_dxrGI ? (uint32_t)(r_dxrGI->integer != 0) : 0u;
+	o.giSamples = r_dxrGISamples ? (uint32_t)r_dxrGISamples->integer : 1u;
+	o.giStrength = r_dxrGIStrength ? r_dxrGIStrength->value : 0.12f;
+	o.giMaxDistance = r_dxrGIMaxDistance ? r_dxrGIMaxDistance->value : 256.0f;
+
+	o.denoiserEnabled = r_dxrDenoiser ? (uint32_t)(r_dxrDenoiser->integer != 0) : 0u;
+	o.denoiserRadius = r_dxrDenoiserRadius ? (uint32_t)r_dxrDenoiserRadius->integer : 1u;
+	o.denoiserStrength = r_dxrDenoiserStrength ? r_dxrDenoiserStrength->value : 0.55f;
+	o.denoiserDepthSigma = r_dxrDenoiserDepthSigma ? r_dxrDenoiserDepthSigma->value : 160.0f;
+	o.denoiserNormalSigma = r_dxrDenoiserNormalSigma ? r_dxrDenoiserNormalSigma->value : 24.0f;
+
+	o.temporalEnabled = r_dxrTemporal ? (uint32_t)(r_dxrTemporal->integer != 0) : 0u;
+	o.temporalWeight = r_dxrTemporalWeight ? r_dxrTemporalWeight->value : 0.72f;
+	o.temporalClamp = r_dxrTemporalClamp ? r_dxrTemporalClamp->value : 0.12f;
+	o.temporalResetThreshold = r_dxrTemporalResetThreshold ? r_dxrTemporalResetThreshold->value : 0.02f;
+
+	o.skyEnabled = r_dxrSky ? (uint32_t)(r_dxrSky->integer != 0) : 0u;
+	o.skyStrength = r_dxrSkyStrength ? r_dxrSkyStrength->value : 0.45f;
+	o.skySamples = r_dxrSkySamples ? (uint32_t)r_dxrSkySamples->integer : 2u;
+	o.skyMaxDistance = r_dxrSkyMaxDistance ? r_dxrSkyMaxDistance->value : 8192.0f;
+
+	o.specularEnabled = r_dxrSpecular ? (uint32_t)(r_dxrSpecular->integer != 0) : 1u;
+	o.specularStrength = r_dxrSpecularStrength ? r_dxrSpecularStrength->value : 1.0f;
+	o.specularPower = r_dxrSpecularPower ? r_dxrSpecularPower->value : 48.0f;
+	o.shadowMinVisibility = r_dxrShadowMinVisibility ? r_dxrShadowMinVisibility->value : 0.04f;
+
+	o.tonemapMode = r_dxrTonemap ? (uint32_t)r_dxrTonemap->integer : 0u;
+	o.hdrWhitePoint = r_dxrHDRWhitePoint ? r_dxrHDRWhitePoint->value : 2.0f;
+	o.bloomStrength = (r_dxrBloom && r_dxrBloom->integer && r_dxrBloomStrength)
+		? r_dxrBloomStrength->value : 0.0f;
+	o.bloomThreshold = r_dxrBloomThreshold ? r_dxrBloomThreshold->value : 1.1f;
+	o.saturation = r_dxrSaturation ? r_dxrSaturation->value : 1.0f;
+	o.contrast = r_dxrContrast ? r_dxrContrast->value : 1.0f;
+	o.outputGamma = r_dxrOutputGamma ? r_dxrOutputGamma->value : 1.0f;
+	o.frameIndex = s_dxrEffectsFrameIndex++;
+	o.debugEffect = r_dxrDebugEffect ? (uint32_t)r_dxrDebugEffect->integer : 0u;
+
+	// Playable v6 component mixer and stability guardrails.  Every value is
+	// runtime-switchable from the console; none of these cvars is latched.
+	o.directLightingStrength = r_dxrDirectLightingStrength ? r_dxrDirectLightingStrength->value : 0.20f;
+	o.lightmapStrength = r_dxrLightmapStrength ? r_dxrLightmapStrength->value : 1.00f;
+	o.aoLightmapStrength = r_dxrAOLightmapStrength ? r_dxrAOLightmapStrength->value : 0.22f;
+	o.shadowLightmapStrength = r_dxrShadowLightmapStrength ? r_dxrShadowLightmapStrength->value : 0.18f;
+	o.radianceClamp = r_dxrRadianceClamp ? r_dxrRadianceClamp->value : 3.25f;
+	o.highlightCompression = r_dxrHighlightCompression ? r_dxrHighlightCompression->value : 1.40f;
+	o.pointLightIntensityCap = r_dxrPointLightIntensityCap ? r_dxrPointLightIntensityCap->value : 3.50f;
+	o.rectLightIntensityCap = r_dxrRectLightIntensityCap ? r_dxrRectLightIntensityCap->value : 2.20f;
+	o.lightRadiusMin = r_dxrLightRadiusMin ? r_dxrLightRadiusMin->value : 48.0f;
+	o.lightRadiusMax = r_dxrLightRadiusMax ? r_dxrLightRadiusMax->value : 2048.0f;
+	o.lightSelectionHysteresis = r_dxrLightSelectionHysteresis ? r_dxrLightSelectionHysteresis->value : 0.18f;
+	o.lightSelectionMinScore = r_dxrLightSelectionMinScore ? r_dxrLightSelectionMinScore->value : 0.0005f;
+	o.temporalPositionThreshold = r_dxrTemporalPositionThreshold ? r_dxrTemporalPositionThreshold->value : 0.10f;
+	o.temporalRotationThreshold = r_dxrTemporalRotationThreshold ? r_dxrTemporalRotationThreshold->value : 0.0015f;
+	o.temporalMaxFrames = r_dxrTemporalMaxFrames ? (uint32_t)r_dxrTemporalMaxFrames->integer : 8u;
+	o.lightSelectionMode = r_dxrLightSelectionMode ? (uint32_t)r_dxrLightSelectionMode->integer : 1u;
+	return o;
+}
+
+static void RB_RunRaytracedLightingPass(void)
+{
+	static int s_lastDXRDebugPrintTime = 0;
+
+	if (backEnd.raytraceRendered || !RB_DXRShouldRenderLighting())
+	{
+		return;
+	}
+
+	backEnd.raytraceRendered = qtrue;
+
+	glRaytracingSetCleanVisualSafetyOptions(
+		r_dxrSafeMode ? r_dxrSafeMode->integer : 1,
+		r_dxrErrorLimit ? r_dxrErrorLimit->integer : 2,
+		r_dxrFenceWaitMs ? r_dxrFenceWaitMs->integer : 2500);
+
+	if (r_dxrHistoryReset && r_dxrHistoryReset->integer)
+	{
+		glRaytracingLightingResetHistory();
+		ri.Cvar_Set("r_dxrHistoryReset", "0");
+	}
+
+	const glRaytracingEffectsOptions_t effectsOptions = RB_BuildDXREffectsOptions();
+	glRaytracingLightingSetEffectsOptions(&effectsOptions);
+
+	if (r_dxrShadowBias)
+	{
+		glRaytracingLightingSetShadowBias(r_dxrShadowBias->value);
+	}
+
+	if (r_dxrAmbientIntensity)
+	{
+		glRaytracingLightingSetAmbient(0.14f, 0.14f, 0.16f, r_dxrAmbientIntensity->value);
+	}
+	else
+	{
+		glRaytracingLightingSetAmbient(0.14f, 0.14f, 0.16f, 0.85f);
+	}
+
+	if (r_dxrExposure)
+	{
+		glRaytracingLightingSetExposure(r_dxrExposure->value);
+	}
+	else
+	{
+		glRaytracingLightingSetExposure(0.92f);
+	}
+
+	if (r_dxrLegacyBlend)
+	{
+		glRaytracingLightingSetLegacyBlend(r_dxrLegacyBlend->value);
+	}
+	else
+	{
+		glRaytracingLightingSetLegacyBlend(0.88f);
+	}
+
+	if (r_dxrDebugMode)
+	{
+		glRaytracingLightingSetDebugMode((uint32_t)r_dxrDebugMode->integer);
+	}
+	else
+	{
+		glRaytracingLightingSetDebugMode(0);
+	}
+
+	RB_AddDXRFallbackLightIfNeeded();
+
+	if (r_dxrDebug && r_dxrDebug->integer)
+	{
+		const int now = ri.Milliseconds();
+		if (now - s_lastDXRDebugPrintTime > 1000)
+		{
+			s_lastDXRDebugPrintTime = now;
+			ri.Printf(PRINT_ALL,
+				"DXR v6: meshes=%u instances=%u lights=%u selected=%u rejected=%u fallback=%d radius=%.1f intensity=%.2f bias=%.4f ambient=%.2f legacy=%.2f exposure=%.2f debugMode=%d\n",
+				glRaytracingGetMeshCount(),
+				glRaytracingGetInstanceCount(),
+				glRaytracingLightingGetLightCount(),
+				glRaytracingLightingGetSelectedLightCount(),
+				glRaytracingLightingGetRejectedLightCount(),
+				r_dxrFallbackLight ? r_dxrFallbackLight->integer : 0,
+				r_dxrFallbackLightRadius ? r_dxrFallbackLightRadius->value : 0.0f,
+				r_dxrFallbackLightIntensity ? r_dxrFallbackLightIntensity->value : 0.0f,
+				r_dxrShadowBias ? r_dxrShadowBias->value : 0.0f,
+				r_dxrAmbientIntensity ? r_dxrAmbientIntensity->value : 0.0f,
+				r_dxrLegacyBlend ? r_dxrLegacyBlend->value : 0.0f,
+				r_dxrExposure ? r_dxrExposure->value : 0.0f,
+				r_dxrDebugMode ? r_dxrDebugMode->integer : 0);
+			ri.Printf(PRINT_ALL,
+				"DXR v6 FX: shadows=%u samples=%u cull=%u contact=%u sun=%u dyn=%u maxLights=%u AO=%u refl=%u sky=%u GI=%u denoise=%u temporal=%u tonemap=%u direct=%.2f lightmap=%.2f clamp=%.2f debugEffect=%u\n",
+				effectsOptions.shadowsEnabled,
+				effectsOptions.shadowSamples,
+				effectsOptions.shadowCullMode,
+				effectsOptions.contactShadows,
+				effectsOptions.sunEnabled,
+				effectsOptions.dynamicLightsEnabled,
+				effectsOptions.maxLights,
+				effectsOptions.aoEnabled,
+				effectsOptions.reflectionsEnabled,
+				effectsOptions.skyEnabled,
+				effectsOptions.giEnabled,
+				effectsOptions.denoiserEnabled,
+				effectsOptions.temporalEnabled,
+				effectsOptions.tonemapMode,
+				effectsOptions.directLightingStrength,
+				effectsOptions.lightmapStrength,
+				effectsOptions.radianceClamp,
+				effectsOptions.debugEffect);
+		}
+	}
+
+	glRaytracingSetCleanVisualPerformanceOptions(
+		r_dxrAsyncSubmit ? r_dxrAsyncSubmit->integer : 0,
+		r_dxrBuildInterval ? r_dxrBuildInterval->integer : 1,
+		r_dxrDispatchInterval ? r_dxrDispatchInterval->integer : 1);
+
+	// QD3D12_FlushQueuedBatches() in glLightScene submits prior raster work on
+	// the same queue. A global glFinish here forces a full GPU idle every frame.
+	if (r_dxrCpuSync && r_dxrCpuSync->integer)
+		glFinish();
+	glLightScene();
+	glRaytracingLightingClearLights(false);
 }
 
 /*
@@ -1219,12 +1514,9 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 			oldAtiTess = atiTess;
 		}
 
-// jmarshall - in non skyportal passes we want to render raytracing, but just before the first bleding passes. 
-		if (shader->sort > SS_OPAQUE && !backEnd.raytraceRendered && !(backEnd.refdef.rdflags & RDF_SKYBOXPORTAL)) {
-			backEnd.raytraceRendered = true;
-			glFinish();
-			glLightScene();
-			glRaytracingLightingClearLights(false);
+// jmarshall - in non skyportal passes we want to render raytracing, but just before the first blending passes.
+		if (shader->sort > SS_OPAQUE) {
+			RB_RunRaytracedLightingPass();
 		}
 // jmarshall end
 		//
@@ -1341,6 +1633,10 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 
 	// add light flares on lights that aren't obscured
 	RB_RenderFlares();
+
+	// Some RTCW views have no transparent batch.  In that case the shader-sort
+	// hook above never fires, so execute DXR before 2D UI commands.
+	RB_RunRaytracedLightingPass();
 
 #ifdef __MACOS__
 	Sys_PumpEvents();       // crutch up the mac's limited buffer queue size
@@ -1492,12 +1788,7 @@ const void* RB_Raytrace(const void* data) {
 	const raytraceRenderCommand_t* cmd;
 	cmd = (const raytraceRenderCommand_t*)data;
 
-	if (!backEnd.raytraceRendered) {
-		backEnd.raytraceRendered = true;
-		glFinish();
-		glLightScene();
-		glRaytracingLightingClearLights(false);
-	}
+	RB_RunRaytracedLightingPass();
 
 	return (const void*)(cmd + 1);
 }

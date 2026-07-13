@@ -1129,7 +1129,11 @@ static qboolean RB_DXRShouldRenderLighting(void)
 
 static void RB_AddDXRFallbackLightIfNeeded(void)
 {
-	if (!r_dxrFallbackLight || !r_dxrFallbackLight->integer)
+	// The camera-attached fallback light is a diagnostics-only tool.  It must
+	// never enter a normal gameplay profile because it moves with the camera
+	// and creates the extreme exposure pumping seen in the v5 tests.
+	if (!r_dxrFallbackLight || !r_dxrFallbackLight->integer ||
+		!r_dxrDebug || !r_dxrDebug->integer)
 	{
 		return;
 	}
@@ -1234,6 +1238,25 @@ static glRaytracingEffectsOptions_t RB_BuildDXREffectsOptions(void)
 	o.outputGamma = r_dxrOutputGamma ? r_dxrOutputGamma->value : 1.0f;
 	o.frameIndex = s_dxrEffectsFrameIndex++;
 	o.debugEffect = r_dxrDebugEffect ? (uint32_t)r_dxrDebugEffect->integer : 0u;
+
+	// Playable v6 component mixer and stability guardrails.  Every value is
+	// runtime-switchable from the console; none of these cvars is latched.
+	o.directLightingStrength = r_dxrDirectLightingStrength ? r_dxrDirectLightingStrength->value : 0.20f;
+	o.lightmapStrength = r_dxrLightmapStrength ? r_dxrLightmapStrength->value : 1.00f;
+	o.aoLightmapStrength = r_dxrAOLightmapStrength ? r_dxrAOLightmapStrength->value : 0.22f;
+	o.shadowLightmapStrength = r_dxrShadowLightmapStrength ? r_dxrShadowLightmapStrength->value : 0.18f;
+	o.radianceClamp = r_dxrRadianceClamp ? r_dxrRadianceClamp->value : 3.25f;
+	o.highlightCompression = r_dxrHighlightCompression ? r_dxrHighlightCompression->value : 1.40f;
+	o.pointLightIntensityCap = r_dxrPointLightIntensityCap ? r_dxrPointLightIntensityCap->value : 3.50f;
+	o.rectLightIntensityCap = r_dxrRectLightIntensityCap ? r_dxrRectLightIntensityCap->value : 2.20f;
+	o.lightRadiusMin = r_dxrLightRadiusMin ? r_dxrLightRadiusMin->value : 48.0f;
+	o.lightRadiusMax = r_dxrLightRadiusMax ? r_dxrLightRadiusMax->value : 2048.0f;
+	o.lightSelectionHysteresis = r_dxrLightSelectionHysteresis ? r_dxrLightSelectionHysteresis->value : 0.18f;
+	o.lightSelectionMinScore = r_dxrLightSelectionMinScore ? r_dxrLightSelectionMinScore->value : 0.0005f;
+	o.temporalPositionThreshold = r_dxrTemporalPositionThreshold ? r_dxrTemporalPositionThreshold->value : 0.10f;
+	o.temporalRotationThreshold = r_dxrTemporalRotationThreshold ? r_dxrTemporalRotationThreshold->value : 0.0015f;
+	o.temporalMaxFrames = r_dxrTemporalMaxFrames ? (uint32_t)r_dxrTemporalMaxFrames->integer : 8u;
+	o.lightSelectionMode = r_dxrLightSelectionMode ? (uint32_t)r_dxrLightSelectionMode->integer : 1u;
 	return o;
 }
 
@@ -1273,7 +1296,7 @@ static void RB_RunRaytracedLightingPass(void)
 	}
 	else
 	{
-		glRaytracingLightingSetAmbient(0.14f, 0.14f, 0.16f, 1.35f);
+		glRaytracingLightingSetAmbient(0.14f, 0.14f, 0.16f, 0.85f);
 	}
 
 	if (r_dxrExposure)
@@ -1282,7 +1305,7 @@ static void RB_RunRaytracedLightingPass(void)
 	}
 	else
 	{
-		glRaytracingLightingSetExposure(1.15f);
+		glRaytracingLightingSetExposure(0.92f);
 	}
 
 	if (r_dxrLegacyBlend)
@@ -1291,7 +1314,7 @@ static void RB_RunRaytracedLightingPass(void)
 	}
 	else
 	{
-		glRaytracingLightingSetLegacyBlend(0.65f);
+		glRaytracingLightingSetLegacyBlend(0.88f);
 	}
 
 	if (r_dxrDebugMode)
@@ -1312,10 +1335,12 @@ static void RB_RunRaytracedLightingPass(void)
 		{
 			s_lastDXRDebugPrintTime = now;
 			ri.Printf(PRINT_ALL,
-				"DXR: meshes=%u instances=%u lights=%u fallback=%d radius=%.1f intensity=%.2f bias=%.4f ambient=%.2f legacy=%.2f exposure=%.2f debugMode=%d\n",
+				"DXR v6: meshes=%u instances=%u lights=%u selected=%u rejected=%u fallback=%d radius=%.1f intensity=%.2f bias=%.4f ambient=%.2f legacy=%.2f exposure=%.2f debugMode=%d\n",
 				glRaytracingGetMeshCount(),
 				glRaytracingGetInstanceCount(),
 				glRaytracingLightingGetLightCount(),
+				glRaytracingLightingGetSelectedLightCount(),
+				glRaytracingLightingGetRejectedLightCount(),
 				r_dxrFallbackLight ? r_dxrFallbackLight->integer : 0,
 				r_dxrFallbackLightRadius ? r_dxrFallbackLightRadius->value : 0.0f,
 				r_dxrFallbackLightIntensity ? r_dxrFallbackLightIntensity->value : 0.0f,
@@ -1325,7 +1350,7 @@ static void RB_RunRaytracedLightingPass(void)
 				r_dxrExposure ? r_dxrExposure->value : 0.0f,
 				r_dxrDebugMode ? r_dxrDebugMode->integer : 0);
 			ri.Printf(PRINT_ALL,
-				"DXR LAB: shadows=%u samples=%u cull=%u contact=%u sun=%u dyn=%u maxLights=%u AO=%u refl=%u GI=%u denoise=%u temporal=%u debugEffect=%u\n",
+				"DXR v6 FX: shadows=%u samples=%u cull=%u contact=%u sun=%u dyn=%u maxLights=%u AO=%u refl=%u sky=%u GI=%u denoise=%u temporal=%u tonemap=%u direct=%.2f lightmap=%.2f clamp=%.2f debugEffect=%u\n",
 				effectsOptions.shadowsEnabled,
 				effectsOptions.shadowSamples,
 				effectsOptions.shadowCullMode,
@@ -1335,16 +1360,21 @@ static void RB_RunRaytracedLightingPass(void)
 				effectsOptions.maxLights,
 				effectsOptions.aoEnabled,
 				effectsOptions.reflectionsEnabled,
+				effectsOptions.skyEnabled,
 				effectsOptions.giEnabled,
 				effectsOptions.denoiserEnabled,
 				effectsOptions.temporalEnabled,
+				effectsOptions.tonemapMode,
+				effectsOptions.directLightingStrength,
+				effectsOptions.lightmapStrength,
+				effectsOptions.radianceClamp,
 				effectsOptions.debugEffect);
 		}
 	}
 
 	glRaytracingSetCleanVisualPerformanceOptions(
-		r_dxrAsyncSubmit ? r_dxrAsyncSubmit->integer : 1,
-		r_dxrBuildInterval ? r_dxrBuildInterval->integer : 2,
+		r_dxrAsyncSubmit ? r_dxrAsyncSubmit->integer : 0,
+		r_dxrBuildInterval ? r_dxrBuildInterval->integer : 1,
 		r_dxrDispatchInterval ? r_dxrDispatchInterval->integer : 1);
 
 	// QD3D12_FlushQueuedBatches() in glLightScene submits prior raster work on

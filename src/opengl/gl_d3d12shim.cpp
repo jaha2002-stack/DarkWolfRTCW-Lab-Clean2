@@ -9491,15 +9491,19 @@ void glLightScene(void)
 	if (!g_gl.device || !g_gl.cmdList)
 		return;
 
+	if (!glRaytracingLightingIsInitialized())
+		return;
+
 	QD3D12_EnsureFrameOpen();
 
 	TextureResource* lightingTex = QD3D12_EnsureLightingTexture(width, height);
 	if (!lightingTex || !lightingTex->texture)
 		return;
 
-	glRaytracingBuildScene();
-
 	QD3D12_FlushQueuedBatches();
+
+	if (!glRaytracingBuildScene())
+		return;
 
 	ID3D12GraphicsCommandList* cl = g_gl.cmdList.Get();
 	ID3D12Resource* sceneColor = g_currentWindow->sceneColorBuffers[g_currentWindow->frameIndex].Get();
@@ -9598,7 +9602,8 @@ void glLightScene(void)
 		return;
 	}
 
-	g_lightingTextureState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+	// glRaytracingLightingExecute leaves the output texture in SRV state.
+	g_lightingTextureState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
 	QD3D12_RunRayAIDenoiseIfEnabled(cl, *g_currentWindow, lightingTex->texture.Get());
 

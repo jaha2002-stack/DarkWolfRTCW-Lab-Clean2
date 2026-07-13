@@ -4,6 +4,13 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#endif
+
 #include <d3d12.h>
 
 #ifdef _WIN32
@@ -1649,6 +1656,105 @@ typedef struct glRaytracingLight_s
 	float              pad1;
 } glRaytracingLight_t;
 
+typedef struct glRaytracingEffectsOptions_s
+{
+	uint32_t shadowsEnabled;
+	float shadowStrength;
+	uint32_t shadowSamples;
+	float shadowSoftness;
+
+	float shadowMaxDistance;
+	uint32_t shadowCullMode;
+	uint32_t contactShadows;
+	float contactShadowLength;
+
+	uint32_t sunEnabled;
+	float sunIntensity;
+	float sunAngularRadius;
+	uint32_t sunSamples;
+
+	float sunDirection[4];
+	float sunColor[4];
+
+	uint32_t dynamicLightsEnabled;
+	uint32_t dynamicLightShadows;
+	uint32_t maxLights;
+	float dynamicLightIntensityScale;
+
+	float dynamicLightRadiusScale;
+	uint32_t aoEnabled;
+	uint32_t aoSamples;
+	float aoRadius;
+
+	float aoStrength;
+	uint32_t reflectionsEnabled;
+	uint32_t reflectionSamples;
+	float reflectionStrength;
+
+	float reflectionMaxDistance;
+	float reflectionRoughness;
+	uint32_t giEnabled;
+	uint32_t giSamples;
+
+	float giStrength;
+	float giMaxDistance;
+	uint32_t denoiserEnabled;
+	uint32_t denoiserRadius;
+
+	float denoiserStrength;
+	float denoiserDepthSigma;
+	float denoiserNormalSigma;
+	uint32_t temporalEnabled;
+
+	float temporalWeight;
+	float temporalClamp;
+	float temporalResetThreshold;
+	uint32_t skyEnabled;
+
+	float skyStrength;
+	uint32_t skySamples;
+	float skyMaxDistance;
+	uint32_t specularEnabled;
+
+	float specularStrength;
+	float specularPower;
+	float shadowMinVisibility;
+	uint32_t tonemapMode;
+
+	float hdrWhitePoint;
+	float bloomStrength;
+	float bloomThreshold;
+	float saturation;
+
+	float contrast;
+	float outputGamma;
+	uint32_t frameIndex;
+	uint32_t debugEffect;
+
+	// Playable v6: explicit component mixing, HDR guard, deterministic
+	// importance-based light selection and temporal reset controls.
+	float directLightingStrength;
+	float lightmapStrength;
+	float aoLightmapStrength;
+	float shadowLightmapStrength;
+
+	float radianceClamp;
+	float highlightCompression;
+	float pointLightIntensityCap;
+	float rectLightIntensityCap;
+
+	float lightRadiusMin;
+	float lightRadiusMax;
+	float lightSelectionHysteresis;
+	float lightSelectionMinScore;
+
+	float temporalPositionThreshold;
+	float temporalRotationThreshold;
+	uint32_t temporalMaxFrames;
+	uint32_t lightSelectionMode;
+} glRaytracingEffectsOptions_t;
+
+
 typedef struct glRaytracingLightingPassDesc_s
 {
 	ID3D12Resource* albedoTexture;
@@ -1695,6 +1801,11 @@ uint32_t                   glRaytracingGetInstanceCount(void);
 bool                       glRaytracingLightingInit(void);
 void                       glRaytracingLightingShutdown(void);
 bool                       glRaytracingLightingIsInitialized(void);
+void                       glRaytracingSetCleanVisualSafetyOptions(int safeMode, int errorLimit, int fenceWaitMs);
+void                       glRaytracingSetCleanVisualPerformanceOptions(int asyncSubmit, int buildInterval, int dispatchInterval);
+void                       glRaytracingLightingSetEffectsOptions(const glRaytracingEffectsOptions_t* options);
+void                       glRaytracingLightingResetHistory(void);
+int                        glRaytracingHasDeviceLost(void);
 
 void                       glRaytracingLightingClearLights(bool clearPersistant);
 bool                       glRaytracingLightingAddLight(const glRaytracingLight_t* light);
@@ -1707,6 +1818,9 @@ void                       glRaytracingLightingSetNormalReconstructSign(float si
 void                       glRaytracingLightingEnableSpecular(int enable);
 void                       glRaytracingLightingEnableHalfLambert(int enable);
 void                       glRaytracingLightingSetShadowBias(float bias);
+void                       glRaytracingLightingSetExposure(float exposure);
+void                       glRaytracingLightingSetLegacyBlend(float legacyBlend);
+void                       glRaytracingLightingSetDebugMode(uint32_t mode);
 
 bool                       glRaytracingLightingExecute(const glRaytracingLightingPassDesc_t* pass);
 
@@ -1728,6 +1842,8 @@ glRaytracingLight_t        glRaytracingLightingMakeRectLight(
 	uint32_t twoSided);
 
 uint32_t                   glRaytracingLightingGetLightCount(void);
+uint32_t                   glRaytracingLightingGetSelectedLightCount(void);
+uint32_t                   glRaytracingLightingGetRejectedLightCount(void);
 
 void                       glLightScene(void);
 
@@ -1735,6 +1851,13 @@ ID3D12Device* QD3D12_GetDevice(void);
 ID3D12CommandQueue* QD3D12_GetQueue(void);
 ID3D12GraphicsCommandList* QD3D12_GetCommandList(void);
 ID3D12Resource* QD3D12_GetCurrentBackBuffer(void);
+void QD3D12_SetUpscalerBackend(int backend);
+void QD3D12_SetUpscalerQuality(int quality);
+void QD3D12_SetUpscalerSharpness(float sharpness);
+void QD3D12_EnableRayAIDenoise(int enabled);
+void QD3D12_EnableDLSSRayReconstruction(int enabled);
+void QD3D12_EnableFSRRayRegeneration(int enabled);
+void QD3D12_ResetTemporalHistory(void);
 
 static float glRaytracingSqrtf(float x)
 {

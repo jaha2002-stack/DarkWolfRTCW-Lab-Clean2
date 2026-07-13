@@ -56,3 +56,21 @@ https://ibb.co/C3jNFwfy
 ## Tags
 
 `rtcw` `wolfenstein` `dxr` `d3d12` `raytracing` `opengl` `idtech3` `graphics` `rendering`
+
+---
+
+## RT Effects Playable v6
+
+This source snapshot includes the **DarkWolfRTCW RT Effects Playable v6** pipeline and a dedicated Windows GitHub Actions workflow.
+
+- all bounded gameplay RT effects enabled in the Balanced profile;
+- importance-selected real game lights;
+- HDR highlight guard and separate lightmap/RT component mixer;
+- spatial denoising and camera-reset temporal stabilization;
+- safe synchronous submission defaults;
+- runtime cvar toggles and debug component views;
+- no startup renderer restart.
+
+Build with the workflow **DarkWolf RTCW RT Effects Playable v6**, then start the packaged runtime using `RUN_RT_ALL_BALANCED.bat`.
+
+Russian installation and tuning guide: `README_DARKWOLF_RT_EFFECTS_PLAYABLE_V6_RU.md`.

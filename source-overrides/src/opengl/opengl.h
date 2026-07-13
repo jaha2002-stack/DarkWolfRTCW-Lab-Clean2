@@ -4,6 +4,13 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#endif
+
 #include <d3d12.h>
 
 #ifdef _WIN32
@@ -1723,6 +1730,28 @@ typedef struct glRaytracingEffectsOptions_s
 	float outputGamma;
 	uint32_t frameIndex;
 	uint32_t debugEffect;
+
+	// Playable v6: explicit component mixing, HDR guard, deterministic
+	// importance-based light selection and temporal reset controls.
+	float directLightingStrength;
+	float lightmapStrength;
+	float aoLightmapStrength;
+	float shadowLightmapStrength;
+
+	float radianceClamp;
+	float highlightCompression;
+	float pointLightIntensityCap;
+	float rectLightIntensityCap;
+
+	float lightRadiusMin;
+	float lightRadiusMax;
+	float lightSelectionHysteresis;
+	float lightSelectionMinScore;
+
+	float temporalPositionThreshold;
+	float temporalRotationThreshold;
+	uint32_t temporalMaxFrames;
+	uint32_t lightSelectionMode;
 } glRaytracingEffectsOptions_t;
 
 
@@ -1813,6 +1842,8 @@ glRaytracingLight_t        glRaytracingLightingMakeRectLight(
 	uint32_t twoSided);
 
 uint32_t                   glRaytracingLightingGetLightCount(void);
+uint32_t                   glRaytracingLightingGetSelectedLightCount(void);
+uint32_t                   glRaytracingLightingGetRejectedLightCount(void);
 
 void                       glLightScene(void);
 

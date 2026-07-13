@@ -1216,6 +1216,22 @@ extern cvar_t   *r_dxrRayAIDenoise;
 extern cvar_t   *r_dxrDLSSRayReconstruction;
 extern cvar_t   *r_dxrFSRRayRegeneration;
 extern cvar_t   *r_dxrDebugEffect;
+extern cvar_t   *r_dxrDirectLightingStrength;
+extern cvar_t   *r_dxrLightmapStrength;
+extern cvar_t   *r_dxrAOLightmapStrength;
+extern cvar_t   *r_dxrShadowLightmapStrength;
+extern cvar_t   *r_dxrRadianceClamp;
+extern cvar_t   *r_dxrHighlightCompression;
+extern cvar_t   *r_dxrPointLightIntensityCap;
+extern cvar_t   *r_dxrRectLightIntensityCap;
+extern cvar_t   *r_dxrLightRadiusMin;
+extern cvar_t   *r_dxrLightRadiusMax;
+extern cvar_t   *r_dxrLightSelectionHysteresis;
+extern cvar_t   *r_dxrLightSelectionMinScore;
+extern cvar_t   *r_dxrLightSelectionMode;
+extern cvar_t   *r_dxrTemporalPositionThreshold;
+extern cvar_t   *r_dxrTemporalRotationThreshold;
+extern cvar_t   *r_dxrTemporalMaxFrames;
 
 extern cvar_t  *r_norefresh;            // bypasses the ref rendering
 extern cvar_t  *r_drawentities;         // disable/enable entity rendering

@@ -21,6 +21,8 @@ extern void __cdecl Com_Printf(const char* fmt, ...);
 #include <stdio.h>
 #include <stdarg.h>
 #include <assert.h>
+#include <math.h>
+#include <float.h>
 
 #pragma comment(lib, "dxcompiler.lib")
 #pragma comment(lib, "d3dcompiler.lib")
@@ -1721,12 +1723,15 @@ struct glRaytracingLightingConstants_t
 	uint32_t padConstants1;
 };
 
-static_assert(sizeof(glRaytracingEffectsOptions_t) == 256, "DXR Lab effects constants must stay cbuffer-compatible");
-static_assert(sizeof(glRaytracingLightingConstants_t) == 480, "DXR Lab lighting constants layout changed");
+static_assert(sizeof(glRaytracingEffectsOptions_t) == 320, "DXR Playable v6 effects constants must stay cbuffer-compatible");
+static_assert(sizeof(glRaytracingLightingConstants_t) == 544, "DXR Playable v6 lighting constants layout changed");
 
 struct glRaytracingLightingState_t
 {
 	std::vector<glRaytracingLight_t> cpuLights;
+	std::vector<glRaytracingLight_t> selectedLights;
+	std::vector<uint64_t> selectedLightKeys;
+	std::vector<uint64_t> previousSelectedLightKeys;
 	glRaytracingLightingConstants_t constants;
 
 	ComPtr<ID3D12DescriptorHeap> descriptorHeap;
@@ -1746,6 +1751,11 @@ struct glRaytracingLightingState_t
 	int historyValid;
 	int havePreviousView;
 	float previousView[16];
+	int havePreviousCamera;
+	float previousCameraPos[3];
+	uint32_t temporalHistoryAge;
+	uint32_t selectedLightCount;
+	uint32_t rejectedLightCount;
 
 	ComPtr<ID3D12RootSignature> globalRootSig;
 	ComPtr<ID3D12RootSignature> localRootSig;
@@ -1771,6 +1781,11 @@ struct glRaytracingLightingState_t
 		historyValid = 0;
 		havePreviousView = 0;
 		memset(previousView, 0, sizeof(previousView));
+		havePreviousCamera = 0;
+		memset(previousCameraPos, 0, sizeof(previousCameraPos));
+		temporalHistoryAge = 0;
+		selectedLightCount = 0;
+		rejectedLightCount = 0;
 		initialized = false;
 	}
 };
@@ -1891,6 +1906,26 @@ cbuffer LightingCB : register(b0)
     float    gOutputGamma;
     uint     gFrameIndex;
     uint     gDebugEffect;
+
+    float    gDirectLightingStrength;
+    float    gLightmapStrength;
+    float    gAOLightmapStrength;
+    float    gShadowLightmapStrength;
+
+    float    gRadianceClamp;
+    float    gHighlightCompression;
+    float    gPointLightIntensityCap;
+    float    gRectLightIntensityCap;
+
+    float    gLightRadiusMin;
+    float    gLightRadiusMax;
+    float    gLightSelectionHysteresis;
+    float    gLightSelectionMinScore;
+
+    float    gTemporalPositionThreshold;
+    float    gTemporalRotationThreshold;
+    uint     gTemporalMaxFrames;
+    uint     gLightSelectionMode;
 
     uint     gHistoryValid;
     uint     gPassMode;
@@ -2276,9 +2311,32 @@ float3 ComputeSpecular(float3 N, float3 V, float3 L, float3 lightColor, float in
     return lightColor * (intensity * attenuation * shadow * NdotL) * fresnel * specPow * energyNorm * gSpecularStrength;
 }
 
-float3 ApplyOutputPost(float3 color)
+)DXRHLSL",
+R"DXRHLSL(float Luminance(float3 color)
+{
+    return dot(color, float3(0.2126, 0.7152, 0.0722));
+}
+
+float3 ApplyRadianceGuard(float3 color)
 {
     color = max(color, 0.0);
+    float limit = max(gRadianceClamp, 0.0);
+    if (limit <= 0.0)
+        return color;
+
+    float peak = max(color.r, max(color.g, color.b));
+    if (peak <= limit)
+        return color;
+
+    float excess = peak - limit;
+    float compression = max(gHighlightCompression, 0.001);
+    float guardedPeak = limit + excess / (1.0 + excess * compression);
+    return color * (guardedPeak / max(peak, 1e-5));
+}
+
+float3 ApplyOutputPost(float3 color)
+{
+    color = ApplyRadianceGuard(color);
     if (gBloomStrength > 0.0)
         color += max(color - gBloomThreshold, 0.0) * gBloomStrength;
     if (gTonemapMode == 1)
@@ -2312,7 +2370,7 @@ float4 ResolveLabPixel(uint2 pixel)
         return float4(ApplyOutputPost(centerSample.rgb), centerSample.a);
 
     float3 centerAlbedo = gAlbedoTex.Load(int3(pixel, 0)).rgb;
-    float3 stableBase = centerAlbedo * saturate(gLegacyBlend) * max(gExposure, 0.001);
+    float3 stableBase = centerAlbedo * max(gLightmapStrength, 0.0) * saturate(gLegacyBlend) * max(gExposure, 0.001);
     float3 currentResidual = centerSample.rgb - stableBase;
     float3 centerNormal = normalize(gNormalTex.Load(int3(pixel, 0)).xyz);
     float3 centerPosition = gPositionTex.Load(int3(pixel, 0)).xyz;
@@ -2341,7 +2399,7 @@ float4 ResolveLabPixel(uint2 pixel)
                     continue;
                 float3 sampleColor = gRawLightingTex.Load(int3(sp, 0)).rgb;
                 float3 sampleAlbedo = gAlbedoTex.Load(int3(sp, 0)).rgb;
-                float3 sampleBase = sampleAlbedo * saturate(gLegacyBlend) * max(gExposure, 0.001);
+                float3 sampleBase = sampleAlbedo * max(gLightmapStrength, 0.0) * saturate(gLegacyBlend) * max(gExposure, 0.001);
                 float3 sampleResidual = sampleColor - sampleBase;
                 float3 sampleNormal = normalize(gNormalTex.Load(int3(sp, 0)).xyz);
                 float3 samplePosition = gPositionTex.Load(int3(sp, 0)).xyz;
@@ -2360,11 +2418,18 @@ float4 ResolveLabPixel(uint2 pixel)
         currentResidual = lerp(currentResidual, filteredResidual, saturate(gDenoiserStrength));
     }
 
+    float3 current = stableBase + currentResidual;
+    float3 currentPost = ApplyOutputPost(current);
+
+    // Playable v6 stores the previously resolved, post-tonemapped frame in the
+    // history texture.  This makes temporal filtering genuinely recursive while
+    // keeping both current and history samples in the same bounded color domain.
+    // CPU-side camera/map/resize resets prevent reprojection-free ghost trails.
     if (gTemporalEnabled != 0 && gHistoryValid != 0)
     {
-        float3 historyResidual = gHistoryTex.Load(int3(pixel, 0)).rgb - stableBase;
-        float3 minResidual = currentResidual;
-        float3 maxResidual = currentResidual;
+        float3 historyPost = gHistoryTex.Load(int3(pixel, 0)).rgb;
+        float3 minRaw = current;
+        float3 maxRaw = current;
         [unroll]
         for (int yy = -1; yy <= 1; ++yy)
         {
@@ -2373,23 +2438,26 @@ float4 ResolveLabPixel(uint2 pixel)
             {
                 int2 sp = clamp(int2(pixel) + int2(xx, yy), int2(0, 0), int2((int)gScreenSize.x - 1, (int)gScreenSize.y - 1));
 )DXRHLSL",
-R"DXRHLSL(                float3 c = gRawLightingTex.Load(int3(sp, 0)).rgb;
-                float3 a = gAlbedoTex.Load(int3(sp, 0)).rgb;
-                float3 residual = c - a * saturate(gLegacyBlend) * max(gExposure, 0.001);
-                minResidual = min(minResidual, residual);
-                maxResidual = max(maxResidual, residual);
+R"DXRHLSL(                float3 neighborRaw = gRawLightingTex.Load(int3(sp, 0)).rgb;
+                minRaw = min(minRaw, neighborRaw);
+                maxRaw = max(maxRaw, neighborRaw);
             }
         }
+        // Output post is component-wise monotonic for the campaign presets, so
+        // converting the neighborhood bounds only twice is much cheaper than
+        // running the full tonemapper for all nine taps.
+        float3 minPost = min(currentPost, ApplyOutputPost(minRaw));
+        float3 maxPost = max(currentPost, ApplyOutputPost(maxRaw));
         float clampAmount = max(gTemporalClamp, 0.0);
-        historyResidual = clamp(historyResidual, minResidual - clampAmount, maxResidual + clampAmount);
-        currentResidual = lerp(currentResidual, historyResidual, saturate(gTemporalWeight));
+        historyPost = clamp(historyPost, minPost - clampAmount, maxPost + clampAmount);
+        currentPost = lerp(currentPost, historyPost, saturate(gTemporalWeight));
     }
 
-    float3 current = stableBase + currentResidual;
-    return float4(ApplyOutputPost(current), centerSample.a);
+    return float4(currentPost, centerSample.a);
 }
 
-[shader("raygeneration")]
+)DXRHLSL",
+R"DXRHLSL([shader("raygeneration")]
 void RayGen()
 {
     uint2 pixel = DispatchRaysIndex().xy;
@@ -2424,6 +2492,7 @@ void RayGen()
     float ao = ComputeAmbientOcclusion(worldPos, N, pixel);
     float skyVisibility = ComputeSkyVisibility(worldPos, N, pixel);
     float3 lightingAccum = gAmbientColor.rgb * gAmbientColor.a;
+    float3 lightingUnshadowedAccum = lightingAccum;
     float3 specularAccum = 0.0;
     float debugShadow = 1.0;
 
@@ -2431,11 +2500,16 @@ void RayGen()
     {
         float upness = saturate(N.z * 0.5 + 0.5);
         float3 classicSkyColor = float3(0.5, 0.5, 0.5) * (0.35 + 0.65 * upness);
-        lightingAccum += classicSkyColor * (gSkyStrength * skyVisibility);
+        float3 skyContribution = classicSkyColor * (gSkyStrength * skyVisibility);
+        lightingAccum += skyContribution;
+        lightingUnshadowedAccum += skyContribution;
     }
 
     if (geoFlag == GEOMETRY_FLAG_SKELETAL)
+    {
         lightingAccum += 0.15;
+        lightingUnshadowedAccum += 0.15;
+    }
 
     if (gSunEnabled != 0)
     {
@@ -2445,7 +2519,9 @@ void RayGen()
         {
             float shadow = SunShadow(worldPos, N, pixel);
             debugShadow = min(debugShadow, shadow);
-            lightingAccum += gSunColor.rgb * (gSunIntensity * ndl * shadow);
+            float3 sunContribution = gSunColor.rgb * (gSunIntensity * ndl);
+            lightingUnshadowedAccum += sunContribution;
+            lightingAccum += sunContribution * shadow;
             specularAccum += ComputeSpecular(N, V, L, gSunColor.rgb, gSunIntensity, 1.0, shadow, baseAlbedo);
         }
     }
@@ -2472,7 +2548,9 @@ void RayGen()
                 if (ndl > 0.0001 && atten > 0.0)
                     shadow = PointLightShadow(worldPos, N, light, toLight, dist, pixel);
                 debugShadow = min(debugShadow, shadow);
-                lightingAccum += light.color * (intensity * atten * ndl * shadow);
+                float3 pointContribution = light.color * (intensity * atten * ndl);
+                lightingUnshadowedAccum += pointContribution;
+                lightingAccum += pointContribution * shadow;
                 specularAccum += ComputeSpecular(N, V, L, light.color, intensity, atten, shadow, baseAlbedo);
             }
             else if (light.type == GL_RAYTRACING_LIGHT_TYPE_RECT)
@@ -2504,17 +2582,22 @@ void RayGen()
                 }
                 rectDiffuseAccum /= (float)lightSamples;
                 rectSpecAccum /= (float)lightSamples;
-                lightingAccum += clamp(rectDiffuseAccum * atten * shadow, 0.0, 4.0);
+                float3 rectContribution = clamp(rectDiffuseAccum * atten, 0.0, max(gRadianceClamp, 1.0));
+                lightingUnshadowedAccum += rectContribution;
+                lightingAccum += rectContribution * shadow;
                 specularAccum += rectSpecAccum * atten * shadow;
             }
         }
     }
 
+    float3 shadowedLighting = lightingAccum;
+    float3 unshadowedLighting = max(lightingUnshadowedAccum, 0.0);
     lightingAccum *= ao;
-    specularAccum *= lerp(1.0, ao, 0.5);
+    specularAccum *= lerp(1.0, ao, 0.45);
     if (geoFlag == GEOMETRY_FLAG_SKELETAL)
     {
         lightingAccum *= 1.05;
+        unshadowedLighting *= 1.05;
         specularAccum *= 1.05;
     }
     float3 reflection = ComputeReflection(worldPos, N, V, pixel);
@@ -2527,10 +2610,24 @@ void RayGen()
     }
     else
     {
-        float3 rtLitColor = albedo * lightingAccum + specularAccum + reflection + gi;
-        rtLitColor = max(rtLitColor, baseAlbedo * 0.15);
-        finalColor = lerp(rtLitColor, baseAlbedo, saturate(gLegacyBlend));
-        finalColor *= max(gExposure, 0.001);
+        // Keep RTCW's authored lightmaps as a stable base.  RT direct light,
+        // specular, AO, sky/reflections and GI are mixed as independent
+        // components instead of treating the already-lit framebuffer as raw
+        // material albedo.  This avoids the v5 exposure pumping.
+        float shadowedLuma = Luminance(max(shadowedLighting, 0.0));
+        float unshadowedLuma = max(Luminance(unshadowedLighting), 1e-4);
+        float shadowRatio = saturate(shadowedLuma / unshadowedLuma);
+        float directPresence = saturate(unshadowedLuma * 0.35);
+        float legacyShadow = lerp(1.0, max(shadowRatio, gShadowMinVisibility),
+            saturate(gShadowLightmapStrength) * directPresence);
+        float legacyAO = lerp(1.0, ao, saturate(gAOLightmapStrength));
+
+        float3 legacyColor = baseAlbedo * max(gLightmapStrength, 0.0) *
+            saturate(gLegacyBlend) * legacyShadow * legacyAO;
+        float3 directDiffuse = albedo * lightingAccum * max(gDirectLightingStrength, 0.0);
+        float3 rtLitColor = directDiffuse + specularAccum + reflection + gi;
+        finalColor = (legacyColor + rtLitColor) * max(gExposure, 0.001);
+        finalColor = ApplyRadianceGuard(finalColor);
 
         if (gDebugMode == 1)
             finalColor = rtLitColor;
@@ -2552,6 +2649,14 @@ R"DXRHLSL(            finalColor = (ao * skyVisibility).xxx;
             finalColor = reflection;
         else if (gDebugEffect == 5)
             finalColor = gi;
+        else if (gDebugEffect == 6)
+            finalColor = directDiffuse;
+        else if (gDebugEffect == 7)
+            finalColor = specularAccum;
+        else if (gDebugEffect == 8)
+            finalColor = legacyColor;
+        else if (gDebugEffect == 9)
+            finalColor = shadowRatio.xxx;
     }
 
     if (!NeedsResolvePass())
@@ -2747,6 +2852,175 @@ static int glRaytracingLightingCreateBuffers(void)
 		g_glRaytracingLighting.lightBuffer.resource;
 }
 
+struct glRaytracingLightCandidate_t
+{
+	glRaytracingLight_t light;
+	float score;
+	uint64_t key;
+	uint32_t sourceIndex;
+};
+
+static uint64_t glRaytracingHashMix64(uint64_t h, uint64_t v)
+{
+	h ^= v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
+	return h;
+}
+
+static uint32_t glRaytracingQuantizeLightFloat(float v, float scale)
+{
+	if (!_finite(v))
+		v = 0.0f;
+	const int32_t q = (int32_t)floorf(v * scale + (v >= 0.0f ? 0.5f : -0.5f));
+	return (uint32_t)q;
+}
+
+static uint64_t glRaytracingLightStableKey(const glRaytracingLight_t& light)
+{
+	uint64_t h = 1469598103934665603ull;
+	h = glRaytracingHashMix64(h, light.type);
+	h = glRaytracingHashMix64(h, glRaytracingQuantizeLightFloat(light.position.x, 0.25f));
+	h = glRaytracingHashMix64(h, glRaytracingQuantizeLightFloat(light.position.y, 0.25f));
+	h = glRaytracingHashMix64(h, glRaytracingQuantizeLightFloat(light.position.z, 0.25f));
+	h = glRaytracingHashMix64(h, glRaytracingQuantizeLightFloat(light.radius, 0.0625f));
+	h = glRaytracingHashMix64(h, glRaytracingQuantizeLightFloat(light.color.x, 64.0f));
+	h = glRaytracingHashMix64(h, glRaytracingQuantizeLightFloat(light.color.y, 64.0f));
+	h = glRaytracingHashMix64(h, glRaytracingQuantizeLightFloat(light.color.z, 64.0f));
+	return h;
+}
+
+static bool glRaytracingWasLightSelected(uint64_t key)
+{
+	return std::find(
+		g_glRaytracingLighting.previousSelectedLightKeys.begin(),
+		g_glRaytracingLighting.previousSelectedLightKeys.end(),
+		key) != g_glRaytracingLighting.previousSelectedLightKeys.end();
+}
+
+static glRaytracingLight_t glRaytracingNormalizeLight(
+	const glRaytracingLight_t& source,
+	const glRaytracingEffectsOptions_t& effects)
+{
+	glRaytracingLight_t light = source;
+	const float radiusMin = glRaytracingClamp(effects.lightRadiusMin, 1.0f, 65536.0f);
+	const float radiusMax = glRaytracingClamp(effects.lightRadiusMax, radiusMin, 65536.0f);
+	light.radius = glRaytracingClamp(_finite(light.radius) ? light.radius : radiusMin, radiusMin, radiusMax);
+
+	float maxColor = std::max(light.color.x, std::max(light.color.y, light.color.z));
+	if (!_finite(maxColor) || maxColor <= 0.0f)
+	{
+		light.color.x = light.color.y = light.color.z = 0.0f;
+	}
+	else if (maxColor > 1.0f)
+	{
+		light.color.x = glRaytracingClamp(light.color.x / maxColor, 0.0f, 1.0f);
+		light.color.y = glRaytracingClamp(light.color.y / maxColor, 0.0f, 1.0f);
+		light.color.z = glRaytracingClamp(light.color.z / maxColor, 0.0f, 1.0f);
+	}
+	else
+	{
+		light.color.x = glRaytracingClamp(light.color.x, 0.0f, 1.0f);
+		light.color.y = glRaytracingClamp(light.color.y, 0.0f, 1.0f);
+		light.color.z = glRaytracingClamp(light.color.z, 0.0f, 1.0f);
+	}
+
+	const float rawIntensity = (_finite(light.intensity) && light.intensity > 0.0f) ? light.intensity : 0.0f;
+	if (light.type == GL_RAYTRACING_LIGHT_TYPE_RECT)
+	{
+		// BSP emissive stages often store old light compiler values in the
+		// hundreds.  Convert that legacy range logarithmically into a bounded
+		// real-time radiance range instead of feeding it directly to HDR output.
+		const float normalized = log2f(1.0f + rawIntensity) * 0.27f;
+		light.intensity = glRaytracingClamp(normalized, 0.0f, std::max(effects.rectLightIntensityCap, 0.0f));
+		const uint32_t sampleCap = glRaytracingClamp<uint32_t>(effects.shadowSamples, 1u, 2u);
+		light.samples = glRaytracingClamp<uint32_t>(light.samples ? light.samples : 1u, 1u, sampleCap);
+	}
+	else
+	{
+		light.intensity = glRaytracingClamp(rawIntensity, 0.0f, std::max(effects.pointLightIntensityCap, 0.0f));
+		light.samples = 1u;
+	}
+	return light;
+}
+
+static float glRaytracingLightImportance(
+	const glRaytracingLight_t& light,
+	const glRaytracingEffectsOptions_t& effects)
+{
+	const float dx = light.position.x - g_glRaytracingLighting.constants.cameraPos[0];
+	const float dy = light.position.y - g_glRaytracingLighting.constants.cameraPos[1];
+	const float dz = light.position.z - g_glRaytracingLighting.constants.cameraPos[2];
+	const float distSq = dx * dx + dy * dy + dz * dz;
+	const float radiusSq = std::max(light.radius * light.radius, 1.0f);
+	const float proximity = 1.0f / (1.0f + distSq / radiusSq);
+	const float luminance =
+		light.color.x * 0.2126f + light.color.y * 0.7152f + light.color.z * 0.0722f;
+	const float radiusWeight = 0.35f + sqrtf(std::max(light.radius, 1.0f) / 256.0f);
+	float areaWeight = 1.0f;
+	if (light.type == GL_RAYTRACING_LIGHT_TYPE_RECT)
+	{
+		const float area = std::max(light.halfWidth * light.halfHeight * 4.0f, 1.0f);
+		areaWeight = 0.75f + sqrtf(area) / 128.0f;
+	}
+	float score = luminance * light.intensity * radiusWeight * areaWeight * proximity;
+	if (distSq < radiusSq)
+		score *= 1.8f;
+	if (light.persistant > 0.5f)
+		score *= 1.05f;
+	const uint64_t key = glRaytracingLightStableKey(light);
+	if (glRaytracingWasLightSelected(key))
+		score *= 1.0f + glRaytracingClamp(effects.lightSelectionHysteresis, 0.0f, 1.0f);
+	return score;
+}
+
+static void glRaytracingLightingSelectLights(void)
+{
+	const glRaytracingEffectsOptions_t& effects = g_glRaytracingLighting.constants.effects;
+	const uint32_t maxSelected = glRaytracingClamp<uint32_t>(effects.maxLights, 0u, GL_RAYTRACING_MAX_LIGHTS);
+	g_glRaytracingLighting.selectedLights.clear();
+	g_glRaytracingLighting.selectedLightKeys.clear();
+
+	std::vector<glRaytracingLightCandidate_t> candidates;
+	candidates.reserve(g_glRaytracingLighting.cpuLights.size());
+	for (uint32_t i = 0; i < (uint32_t)g_glRaytracingLighting.cpuLights.size(); ++i)
+	{
+		glRaytracingLightCandidate_t candidate = {};
+		candidate.light = glRaytracingNormalizeLight(g_glRaytracingLighting.cpuLights[i], effects);
+		candidate.key = glRaytracingLightStableKey(candidate.light);
+		candidate.sourceIndex = i;
+		candidate.score = glRaytracingLightImportance(candidate.light, effects);
+		if (candidate.light.intensity <= 0.0f || candidate.score < std::max(effects.lightSelectionMinScore, 0.0f))
+			continue;
+		candidates.push_back(candidate);
+	}
+
+	if (effects.lightSelectionMode != 0)
+	{
+		std::stable_sort(candidates.begin(), candidates.end(),
+			[](const glRaytracingLightCandidate_t& a, const glRaytracingLightCandidate_t& b)
+			{
+				if (a.score != b.score)
+					return a.score > b.score;
+				if (a.key != b.key)
+					return a.key < b.key;
+				return a.sourceIndex < b.sourceIndex;
+			});
+	}
+
+	const uint32_t count = std::min<uint32_t>((uint32_t)candidates.size(), maxSelected);
+	g_glRaytracingLighting.selectedLights.reserve(count);
+	g_glRaytracingLighting.selectedLightKeys.reserve(count);
+	for (uint32_t i = 0; i < count; ++i)
+	{
+		g_glRaytracingLighting.selectedLights.push_back(candidates[i].light);
+		g_glRaytracingLighting.selectedLightKeys.push_back(candidates[i].key);
+	}
+	g_glRaytracingLighting.previousSelectedLightKeys = g_glRaytracingLighting.selectedLightKeys;
+	g_glRaytracingLighting.selectedLightCount = count;
+	g_glRaytracingLighting.rejectedLightCount =
+		(uint32_t)g_glRaytracingLighting.cpuLights.size() - count;
+	g_glRaytracingLighting.constants.lightCount = count;
+}
+
 static void glRaytracingLightingUpdateConstants(void)
 {
 	glRaytracingLightingConstants_t upload = g_glRaytracingLighting.constants;
@@ -2771,13 +3045,13 @@ static void glRaytracingLightingUpdateResolveConstants(void)
 
 static void glRaytracingLightingUpdateLights(void)
 {
-	if (g_glRaytracingLighting.cpuLights.empty())
+	if (g_glRaytracingLighting.selectedLights.empty())
 		return;
 
 	glRaytracingMapCopy(
 		g_glRaytracingLighting.lightBuffer.resource.Get(),
-		g_glRaytracingLighting.cpuLights.data(),
-		g_glRaytracingLighting.cpuLights.size() * sizeof(glRaytracingLight_t));
+		g_glRaytracingLighting.selectedLights.data(),
+		g_glRaytracingLighting.selectedLights.size() * sizeof(glRaytracingLight_t));
 }
 
 static void glRaytracingLightingCreatePersistentLightSRV(void)
@@ -3093,17 +3367,17 @@ static glRaytracingEffectsOptions_t glRaytracingLightingDefaultEffectsOptions(vo
 {
 	glRaytracingEffectsOptions_t o = {};
 	o.shadowsEnabled = 1;
-	o.shadowStrength = 1.0f;
-	o.shadowSamples = 4;
-	o.shadowSoftness = 1.0f;
+	o.shadowStrength = 0.72f;
+	o.shadowSamples = 1;
+	o.shadowSoftness = 0.45f;
 	o.shadowMaxDistance = 4096.0f;
 	o.shadowCullMode = 0;
 	o.contactShadows = 1;
 	o.contactShadowLength = 96.0f;
-	o.sunEnabled = 0;
-	o.sunIntensity = 1.25f;
+	o.sunEnabled = 1;
+	o.sunIntensity = 0.28f;
 	o.sunAngularRadius = 0.35f;
-	o.sunSamples = 4;
+	o.sunSamples = 1;
 	o.sunDirection[0] = -0.45f;
 	o.sunDirection[1] = 0.25f;
 	o.sunDirection[2] = 0.86f;
@@ -3114,48 +3388,64 @@ static glRaytracingEffectsOptions_t glRaytracingLightingDefaultEffectsOptions(vo
 	o.sunColor[3] = 1.0f;
 	o.dynamicLightsEnabled = 1;
 	o.dynamicLightShadows = 1;
-	o.maxLights = 16;
-	o.dynamicLightIntensityScale = 1.0f;
-	o.dynamicLightRadiusScale = 1.0f;
-	o.aoEnabled = 0;
-	o.aoSamples = 4;
+	o.maxLights = 24;
+	o.dynamicLightIntensityScale = 0.70f;
+	o.dynamicLightRadiusScale = 0.90f;
+	o.aoEnabled = 1;
+	o.aoSamples = 1;
 	o.aoRadius = 24.0f;
-	o.aoStrength = 0.45f;
-	o.reflectionsEnabled = 0;
+	o.aoStrength = 0.28f;
+	o.reflectionsEnabled = 1;
 	o.reflectionSamples = 1;
-	o.reflectionStrength = 0.18f;
-	o.reflectionMaxDistance = 1536.0f;
+	o.reflectionStrength = 0.075f;
+	o.reflectionMaxDistance = 768.0f;
 	o.reflectionRoughness = 0.35f;
-	o.giEnabled = 0;
+	o.giEnabled = 1;
 	o.giSamples = 1;
-	o.giStrength = 0.12f;
-	o.giMaxDistance = 256.0f;
-	o.denoiserEnabled = 0;
+	o.giStrength = 0.065f;
+	o.giMaxDistance = 192.0f;
+	o.denoiserEnabled = 1;
 	o.denoiserRadius = 1;
-	o.denoiserStrength = 0.55f;
+	o.denoiserStrength = 0.78f;
 	o.denoiserDepthSigma = 160.0f;
 	o.denoiserNormalSigma = 24.0f;
-	o.temporalEnabled = 0;
-	o.temporalWeight = 0.72f;
-	o.temporalClamp = 0.12f;
-	o.temporalResetThreshold = 0.02f;
-	o.skyEnabled = 0;
-	o.skyStrength = 0.45f;
-	o.skySamples = 2;
+	o.temporalEnabled = 1;
+	o.temporalWeight = 0.58f;
+	o.temporalClamp = 0.08f;
+	o.temporalResetThreshold = 0.003f;
+	o.skyEnabled = 1;
+	o.skyStrength = 0.16f;
+	o.skySamples = 1;
 	o.skyMaxDistance = 8192.0f;
 	o.specularEnabled = 1;
-	o.specularStrength = 1.0f;
-	o.specularPower = 48.0f;
-	o.shadowMinVisibility = 0.04f;
-	o.tonemapMode = 0;
-	o.hdrWhitePoint = 2.0f;
-	o.bloomStrength = 0.0f;
-	o.bloomThreshold = 1.1f;
-	o.saturation = 1.0f;
-	o.contrast = 1.0f;
+	o.specularStrength = 0.42f;
+	o.specularPower = 64.0f;
+	o.shadowMinVisibility = 0.16f;
+	o.tonemapMode = 2;
+	o.hdrWhitePoint = 2.6f;
+	o.bloomStrength = 0.025f;
+	o.bloomThreshold = 1.35f;
+	o.saturation = 1.02f;
+	o.contrast = 1.01f;
 	o.outputGamma = 1.0f;
 	o.frameIndex = 0;
 	o.debugEffect = 0;
+	o.directLightingStrength = 0.20f;
+	o.lightmapStrength = 1.00f;
+	o.aoLightmapStrength = 0.22f;
+	o.shadowLightmapStrength = 0.18f;
+	o.radianceClamp = 3.25f;
+	o.highlightCompression = 1.40f;
+	o.pointLightIntensityCap = 3.50f;
+	o.rectLightIntensityCap = 2.20f;
+	o.lightRadiusMin = 48.0f;
+	o.lightRadiusMax = 2048.0f;
+	o.lightSelectionHysteresis = 0.18f;
+	o.lightSelectionMinScore = 0.0005f;
+	o.temporalPositionThreshold = 0.10f;
+	o.temporalRotationThreshold = 0.0015f;
+	o.temporalMaxFrames = 8u;
+	o.lightSelectionMode = 1u;
 	return o;
 }
 
@@ -3196,9 +3486,9 @@ bool glRaytracingLightingInit(void)
 	g_glRaytracingLighting.constants.enableSpecular = 1;
 	g_glRaytracingLighting.constants.enableHalfLambert = 1;
 	g_glRaytracingLighting.constants.normalReconstructZ = 1.0f;
-	g_glRaytracingLighting.constants.shadowBias = 0.05f;
-	g_glRaytracingLighting.constants.exposure = 1.15f;
-	g_glRaytracingLighting.constants.legacyBlend = 0.65f;
+	g_glRaytracingLighting.constants.shadowBias = 0.075f;
+	g_glRaytracingLighting.constants.exposure = 0.92f;
+	g_glRaytracingLighting.constants.legacyBlend = 0.88f;
 	g_glRaytracingLighting.constants.debugMode = 0u;
 	g_glRaytracingLighting.constants.effects = glRaytracingLightingDefaultEffectsOptions();
 	g_glRaytracingLighting.historyValid = 0;
@@ -3230,6 +3520,12 @@ void glRaytracingLightingClearLights(bool clearPersistant)
 	if (clearPersistant)
 	{
 		g_glRaytracingLighting.cpuLights.clear();
+		g_glRaytracingLighting.selectedLights.clear();
+		g_glRaytracingLighting.selectedLightKeys.clear();
+		g_glRaytracingLighting.previousSelectedLightKeys.clear();
+		g_glRaytracingLighting.selectedLightCount = 0;
+		g_glRaytracingLighting.rejectedLightCount = 0;
+		glRaytracingLightingResetHistory();
 	}
 	else
 	{
@@ -3265,10 +3561,9 @@ bool glRaytracingLightingAddLight(const glRaytracingLight_t* light)
 		return false;
 
 	g_glRaytracingLighting.cpuLights.push_back(*light);
-	g_glRaytracingLighting.constants.lightCount = (uint32_t)g_glRaytracingLighting.cpuLights.size();
-
-	glRaytracingLightingUpdateLights();
-	glRaytracingLightingUpdateConstants();
+	// Selection, normalization and the single upload happen once per frame in
+	// glRaytracingLightingExecute.  This avoids repeatedly rewriting a mapped
+	// upload buffer while dynamic lights are still being collected.
 	return true;
 }
 
@@ -3283,6 +3578,25 @@ void glRaytracingLightingSetAmbient(float r, float g, float b, float intensity)
 
 void glRaytracingLightingSetCameraPosition(float x, float y, float z)
 {
+	if (g_glRaytracingLighting.havePreviousCamera &&
+		g_glRaytracingLighting.constants.effects.temporalEnabled)
+	{
+		const float dx = x - g_glRaytracingLighting.previousCameraPos[0];
+		const float dy = y - g_glRaytracingLighting.previousCameraPos[1];
+		const float dz = z - g_glRaytracingLighting.previousCameraPos[2];
+		const float distance = sqrtf(dx * dx + dy * dy + dz * dz);
+		const float threshold = std::max(
+			g_glRaytracingLighting.constants.effects.temporalPositionThreshold, 0.0f);
+		if (distance > threshold)
+		{
+			g_glRaytracingLighting.historyValid = 0;
+			g_glRaytracingLighting.temporalHistoryAge = 0;
+		}
+	}
+	g_glRaytracingLighting.previousCameraPos[0] = x;
+	g_glRaytracingLighting.previousCameraPos[1] = y;
+	g_glRaytracingLighting.previousCameraPos[2] = z;
+	g_glRaytracingLighting.havePreviousCamera = 1;
 	g_glRaytracingLighting.constants.cameraPos[0] = x;
 	g_glRaytracingLighting.constants.cameraPos[1] = y;
 	g_glRaytracingLighting.constants.cameraPos[2] = z;
@@ -3314,8 +3628,14 @@ void glRaytracingLightingSetInvViewMatrix(const float* m16)
 			if (delta > maxDelta)
 				maxDelta = delta;
 		}
-		if (maxDelta > g_glRaytracingLighting.constants.effects.temporalResetThreshold)
+		const float resetThreshold = std::max(
+			g_glRaytracingLighting.constants.effects.temporalRotationThreshold,
+			g_glRaytracingLighting.constants.effects.temporalResetThreshold);
+		if (maxDelta > resetThreshold)
+		{
 			g_glRaytracingLighting.historyValid = 0;
+			g_glRaytracingLighting.temporalHistoryAge = 0;
+		}
 	}
 
 	memcpy(g_glRaytracingLighting.previousView, m16, sizeof(float) * 16);
@@ -3392,11 +3712,30 @@ void glRaytracingLightingSetEffectsOptions(const glRaytracingEffectsOptions_t* o
 	o.saturation = glRaytracingClamp(o.saturation, 0.0f, 4.0f);
 	o.contrast = glRaytracingClamp(o.contrast, 0.0f, 4.0f);
 	o.outputGamma = glRaytracingClamp(o.outputGamma, 0.1f, 4.0f);
-	o.debugEffect = glRaytracingClamp(o.debugEffect, 0u, 5u);
+	o.directLightingStrength = glRaytracingClamp(o.directLightingStrength, 0.0f, 4.0f);
+	o.lightmapStrength = glRaytracingClamp(o.lightmapStrength, 0.0f, 2.0f);
+	o.aoLightmapStrength = glRaytracingClamp(o.aoLightmapStrength, 0.0f, 1.0f);
+	o.shadowLightmapStrength = glRaytracingClamp(o.shadowLightmapStrength, 0.0f, 1.0f);
+	o.radianceClamp = glRaytracingClamp(o.radianceClamp, 0.0f, 64.0f);
+	o.highlightCompression = glRaytracingClamp(o.highlightCompression, 0.001f, 16.0f);
+	o.pointLightIntensityCap = glRaytracingClamp(o.pointLightIntensityCap, 0.0f, 64.0f);
+	o.rectLightIntensityCap = glRaytracingClamp(o.rectLightIntensityCap, 0.0f, 64.0f);
+	o.lightRadiusMin = glRaytracingClamp(o.lightRadiusMin, 1.0f, 65536.0f);
+	o.lightRadiusMax = glRaytracingClamp(o.lightRadiusMax, o.lightRadiusMin, 65536.0f);
+	o.lightSelectionHysteresis = glRaytracingClamp(o.lightSelectionHysteresis, 0.0f, 1.0f);
+	o.lightSelectionMinScore = glRaytracingClamp(o.lightSelectionMinScore, 0.0f, 1000.0f);
+	o.temporalPositionThreshold = glRaytracingClamp(o.temporalPositionThreshold, 0.0f, 4096.0f);
+	o.temporalRotationThreshold = glRaytracingClamp(o.temporalRotationThreshold, 0.0f, 1.0f);
+	o.temporalMaxFrames = glRaytracingClamp<uint32_t>(o.temporalMaxFrames, 0u, 1024u);
+	o.lightSelectionMode = glRaytracingClamp<uint32_t>(o.lightSelectionMode, 0u, 1u);
+	o.debugEffect = glRaytracingClamp(o.debugEffect, 0u, 9u);
 
 	g_glRaytracingLighting.constants.effects = o;
 	if (!o.temporalEnabled || oldTemporal != o.temporalEnabled)
+	{
 		g_glRaytracingLighting.historyValid = 0;
+		g_glRaytracingLighting.temporalHistoryAge = 0;
+	}
 	glRaytracingLightingUpdateConstants();
 	glRaytracingLightingUpdateResolveConstants();
 }
@@ -3405,7 +3744,10 @@ void glRaytracingLightingResetHistory(void)
 {
 	g_glRaytracingLighting.historyValid = 0;
 	g_glRaytracingLighting.havePreviousView = 0;
+	g_glRaytracingLighting.havePreviousCamera = 0;
+	g_glRaytracingLighting.temporalHistoryAge = 0;
 	memset(g_glRaytracingLighting.previousView, 0, sizeof(g_glRaytracingLighting.previousView));
+	memset(g_glRaytracingLighting.previousCameraPos, 0, sizeof(g_glRaytracingLighting.previousCameraPos));
 	glRaytracingLightingUpdateConstants();
 	glRaytracingLightingUpdateResolveConstants();
 }
@@ -3491,6 +3833,12 @@ bool glRaytracingLightingExecute(const glRaytracingLightingPassDesc_t* pass)
 		return false;
 
 	const glRaytracingEffectsOptions_t& effects = g_glRaytracingLighting.constants.effects;
+	if (effects.temporalEnabled && effects.temporalMaxFrames > 0 &&
+		g_glRaytracingLighting.temporalHistoryAge >= effects.temporalMaxFrames)
+	{
+		g_glRaytracingLighting.historyValid = 0;
+		g_glRaytracingLighting.temporalHistoryAge = 0;
+	}
 	const bool needsResolve =
 		effects.denoiserEnabled != 0 ||
 		effects.temporalEnabled != 0 ||
@@ -3507,8 +3855,7 @@ bool glRaytracingLightingExecute(const glRaytracingLightingPassDesc_t* pass)
 	g_glRaytracingLighting.constants.screenSize[1] = (float)pass->height;
 	g_glRaytracingLighting.constants.screenSize[2] = 1.0f / (float)pass->width;
 	g_glRaytracingLighting.constants.screenSize[3] = 1.0f / (float)pass->height;
-	g_glRaytracingLighting.constants.lightCount =
-		(uint32_t)glRaytracingClamp<size_t>(g_glRaytracingLighting.cpuLights.size(), 0, GL_RAYTRACING_MAX_LIGHTS);
+	glRaytracingLightingSelectLights();
 
 	ID3D12Resource* primaryOutput = needsResolve
 		? g_glRaytracingLighting.labRawTexture.Get()
@@ -3638,14 +3985,14 @@ bool glRaytracingLightingExecute(const glRaytracingLightingPassDesc_t* pass)
 
 		if (effects.temporalEnabled)
 		{
-			// Store the un-tonemapped full-resolution raw lighting history. This
-			// keeps temporal accumulation in the same color domain on every frame.
+			// Store the fully resolved output. ResolveLabPixel reads history in the
+			// same post-tonemap domain, giving recursive temporal stabilization
+			// without mixing HDR and display-referred values.
 			glRaytracingTransition(
 				g_glRaytracingCmd.cmdList.Get(),
-				g_glRaytracingLighting.labRawTexture.Get(),
-				g_glRaytracingLighting.labRawState,
+				pass->outputTexture,
+				D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
 				D3D12_RESOURCE_STATE_COPY_SOURCE);
-			g_glRaytracingLighting.labRawState = D3D12_RESOURCE_STATE_COPY_SOURCE;
 			glRaytracingTransition(
 				g_glRaytracingCmd.cmdList.Get(),
 				g_glRaytracingLighting.labHistoryTexture.Get(),
@@ -3655,14 +4002,13 @@ bool glRaytracingLightingExecute(const glRaytracingLightingPassDesc_t* pass)
 
 			g_glRaytracingCmd.cmdList->CopyResource(
 				g_glRaytracingLighting.labHistoryTexture.Get(),
-				g_glRaytracingLighting.labRawTexture.Get());
+				pass->outputTexture);
 
 			glRaytracingTransition(
 				g_glRaytracingCmd.cmdList.Get(),
-				g_glRaytracingLighting.labRawTexture.Get(),
+				pass->outputTexture,
 				D3D12_RESOURCE_STATE_COPY_SOURCE,
-				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-			g_glRaytracingLighting.labRawState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+				D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 			glRaytracingTransition(
 				g_glRaytracingCmd.cmdList.Get(),
 				g_glRaytracingLighting.labHistoryTexture.Get(),
@@ -3670,10 +4016,12 @@ bool glRaytracingLightingExecute(const glRaytracingLightingPassDesc_t* pass)
 				D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 			g_glRaytracingLighting.labHistoryState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 			g_glRaytracingLighting.historyValid = 1;
+			++g_glRaytracingLighting.temporalHistoryAge;
 		}
 		else
 		{
 			g_glRaytracingLighting.historyValid = 0;
+			g_glRaytracingLighting.temporalHistoryAge = 0;
 		}
 	}
 	else
@@ -3699,6 +4047,16 @@ bool glRaytracingLightingExecute(const glRaytracingLightingPassDesc_t* pass)
 
 	g_glRaytracingCleanVisualHasOutput = 1;
 	return true;
+}
+
+uint32_t glRaytracingLightingGetSelectedLightCount(void)
+{
+	return g_glRaytracingLighting.selectedLightCount;
+}
+
+uint32_t glRaytracingLightingGetRejectedLightCount(void)
+{
+	return g_glRaytracingLighting.rejectedLightCount;
 }
 
 glRaytracingLight_t glRaytracingLightingMakePointLight(

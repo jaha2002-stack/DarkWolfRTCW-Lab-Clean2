@@ -67,6 +67,7 @@ long myftol( float f );
 struct trDXRSurface_t {
 	glRaytracingInstanceHandle_t dxrInstanceHandle;
 	glRaytracingMeshHandle_t dxrMeshHandle;
+	int cachedFrame = -1;
 };
 
 struct trDXRMesh_t {
@@ -1128,6 +1129,109 @@ extern cvar_t   *r_drawSun;             // controls drawing of sun quad
 extern cvar_t   *r_dynamiclight;        // dynamic lights enabled/disabled
 extern cvar_t   *r_dlightScale;         // global user attenuation of dlights
 extern cvar_t   *r_dlightBacks;         // dlight non-facing surfaces for continuity
+extern cvar_t   *r_dxr;                 // DXR lighting enabled/disabled
+extern cvar_t   *r_dxrShadowBias;       // DXR shadow ray origin bias
+extern cvar_t   *r_dxrAmbientIntensity; // global ambient lift for the DXR resolve
+extern cvar_t   *r_dxrLegacyBlend;      // how much of the original RTCW shading is preserved
+extern cvar_t   *r_dxrExposure;         // post exposure applied to the DXR resolve
+extern cvar_t   *r_dxrDebug;            // periodic DXR state logging to the console
+extern cvar_t   *r_dxrDebugMode;        // 0 normal, 1 lighting only, 2 occlusion, 3 albedo, 4 lighting heatmap
+extern cvar_t   *r_dxrFallbackLight;    // optional camera-side test light for verification
+extern cvar_t   *r_dxrFallbackLightRadius;
+extern cvar_t   *r_dxrFallbackLightIntensity;
+extern cvar_t   *r_dxrSafeMode;         // keep clean-release look, but disable DXR after device lost instead of crashing
+extern cvar_t   *r_dxrErrorLimit;       // suppress repeated DXR errors after first failures
+extern cvar_t   *r_dxrFenceWaitMs;      // safe fence wait timeout before dropping DXR work
+extern cvar_t   *r_dxrAsyncSubmit;      // do not block the CPU after each full-resolution DXR dispatch
+extern cvar_t   *r_dxrBuildInterval;    // reuse the valid TLAS between dynamic-scene updates
+extern cvar_t   *r_dxrDispatchInterval; // reuse the full-resolution lighting output between dispatches
+extern cvar_t   *r_dxrCpuSync;          // legacy full glFinish before DXR, for diagnosis only
+extern cvar_t   *r_dxrShadows;
+extern cvar_t   *r_dxrShadowStrength;
+extern cvar_t   *r_dxrShadowSamples;
+extern cvar_t   *r_dxrShadowSoftness;
+extern cvar_t   *r_dxrShadowMaxDistance;
+extern cvar_t   *r_dxrShadowCullMode;
+extern cvar_t   *r_dxrShadowMinVisibility;
+extern cvar_t   *r_dxrContactShadows;
+extern cvar_t   *r_dxrContactShadowLength;
+extern cvar_t   *r_dxrSun;
+extern cvar_t   *r_dxrSunIntensity;
+extern cvar_t   *r_dxrSunDirX;
+extern cvar_t   *r_dxrSunDirY;
+extern cvar_t   *r_dxrSunDirZ;
+extern cvar_t   *r_dxrSunColorR;
+extern cvar_t   *r_dxrSunColorG;
+extern cvar_t   *r_dxrSunColorB;
+extern cvar_t   *r_dxrSunAngularRadius;
+extern cvar_t   *r_dxrSunShadowSamples;
+extern cvar_t   *r_dxrDynamicLights;
+extern cvar_t   *r_dxrMaxLights;
+extern cvar_t   *r_dxrDynamicLightIntensityScale;
+extern cvar_t   *r_dxrDynamicLightRadiusScale;
+extern cvar_t   *r_dxrDynamicLightShadows;
+extern cvar_t   *r_dxrAO;
+extern cvar_t   *r_dxrAOStrength;
+extern cvar_t   *r_dxrAORadius;
+extern cvar_t   *r_dxrAOSamples;
+extern cvar_t   *r_dxrReflections;
+extern cvar_t   *r_dxrReflectionStrength;
+extern cvar_t   *r_dxrReflectionMaxDistance;
+extern cvar_t   *r_dxrReflectionRoughness;
+extern cvar_t   *r_dxrReflectionSamples;
+extern cvar_t   *r_dxrSky;
+extern cvar_t   *r_dxrSkyStrength;
+extern cvar_t   *r_dxrSkySamples;
+extern cvar_t   *r_dxrSkyMaxDistance;
+extern cvar_t   *r_dxrGI;
+extern cvar_t   *r_dxrGIStrength;
+extern cvar_t   *r_dxrGISamples;
+extern cvar_t   *r_dxrGIMaxDistance;
+extern cvar_t   *r_dxrSpecular;
+extern cvar_t   *r_dxrSpecularStrength;
+extern cvar_t   *r_dxrSpecularPower;
+extern cvar_t   *r_dxrDenoiser;
+extern cvar_t   *r_dxrDenoiserRadius;
+extern cvar_t   *r_dxrDenoiserStrength;
+extern cvar_t   *r_dxrDenoiserDepthSigma;
+extern cvar_t   *r_dxrDenoiserNormalSigma;
+extern cvar_t   *r_dxrTemporal;
+extern cvar_t   *r_dxrTemporalWeight;
+extern cvar_t   *r_dxrTemporalClamp;
+extern cvar_t   *r_dxrTemporalResetThreshold;
+extern cvar_t   *r_dxrHistoryReset;
+extern cvar_t   *r_dxrTonemap;
+extern cvar_t   *r_dxrHDRWhitePoint;
+extern cvar_t   *r_dxrBloom;
+extern cvar_t   *r_dxrBloomStrength;
+extern cvar_t   *r_dxrBloomThreshold;
+extern cvar_t   *r_dxrSaturation;
+extern cvar_t   *r_dxrContrast;
+extern cvar_t   *r_dxrOutputGamma;
+extern cvar_t   *r_dxrNativeResolution;
+extern cvar_t   *r_dxrUpscalerBackend;
+extern cvar_t   *r_dxrUpscalerQuality;
+extern cvar_t   *r_dxrUpscalerSharpness;
+extern cvar_t   *r_dxrRayAIDenoise;
+extern cvar_t   *r_dxrDLSSRayReconstruction;
+extern cvar_t   *r_dxrFSRRayRegeneration;
+extern cvar_t   *r_dxrDebugEffect;
+extern cvar_t   *r_dxrDirectLightingStrength;
+extern cvar_t   *r_dxrLightmapStrength;
+extern cvar_t   *r_dxrAOLightmapStrength;
+extern cvar_t   *r_dxrShadowLightmapStrength;
+extern cvar_t   *r_dxrRadianceClamp;
+extern cvar_t   *r_dxrHighlightCompression;
+extern cvar_t   *r_dxrPointLightIntensityCap;
+extern cvar_t   *r_dxrRectLightIntensityCap;
+extern cvar_t   *r_dxrLightRadiusMin;
+extern cvar_t   *r_dxrLightRadiusMax;
+extern cvar_t   *r_dxrLightSelectionHysteresis;
+extern cvar_t   *r_dxrLightSelectionMinScore;
+extern cvar_t   *r_dxrLightSelectionMode;
+extern cvar_t   *r_dxrTemporalPositionThreshold;
+extern cvar_t   *r_dxrTemporalRotationThreshold;
+extern cvar_t   *r_dxrTemporalMaxFrames;
 
 extern cvar_t  *r_norefresh;            // bypasses the ref rendering
 extern cvar_t  *r_drawentities;         // disable/enable entity rendering

@@ -1,0 +1,31 @@
+DarkWolfRTCW RT Effects Playable v6 - validation report
+========================================================
+
+Validated in the Linux artifact-construction environment:
+
+[PASS] Deterministic source-overrides snapshots are byte-identical to applied src files.
+[PASS] glRaytracingEffectsOptions_t contains 80 x 32-bit scalars (320 bytes).
+[PASS] Lighting constant payload contains 136 x 32-bit scalars (544 bytes).
+[PASS] C++ effects field type sequence matches the HLSL effects cbuffer type sequence.
+[PASS] Embedded HLSL is split into 7 MSVC-safe raw-string chunks.
+[PASS] Largest embedded HLSL chunk is below 8000 UTF-8 bytes.
+[PASS] Embedded HLSL (), {} and [] delimiters are balanced.
+[PASS] Balanced profile enables shadows, sun, real lights, AO, reflections, sky, GI,
+       specular, spatial denoiser, temporal stabilization and HDR post.
+[PASS] v6 gameplay profiles contain no vid_restart command.
+[PASS] Balanced profile forces r_dxrAsyncSubmit 0 and r_dxrCpuSync 1.
+[PASS] Camera fallback light is disabled by profile and gated to debug mode in source.
+[PASS] GitHub Actions v6 workflow YAML parses successfully.
+[PASS] Runtime BAT files use Windows CRLF line endings.
+[PASS] Unified source patch applies cleanly to the exact uploaded GitHub ZIP baseline.
+[PASS] git diff whitespace checks passed.
+
+Not executable in this environment:
+
+[NOT RUN] Windows MSVC compilation.
+[NOT RUN] DXC lib_6_3 compilation of embedded HLSL.
+[NOT RUN] GPU runtime campaign validation.
+
+The included GitHub Actions workflow performs source verification, real DXC compilation,
+and the Windows build before uploading the runtime artifact. Runtime visual tuning still
+requires testing on the target GPU because this environment does not provide D3D12/DXR.

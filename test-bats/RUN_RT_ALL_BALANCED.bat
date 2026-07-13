@@ -1,3 +1,15 @@
 @echo off
+setlocal
 cd /d "%~dp0"
-start "DarkWolf RTCW DXR Lab" WolfSP.exe +exec dxr_lab_all_balanced.cfg
+if not exist "WolfSP.exe" (
+  echo [ERROR] WolfSP.exe not found next to this BAT.
+  pause
+  exit /b 1
+)
+if not exist "main\dxr_v6_all_balanced.cfg" (
+  echo [ERROR] main\dxr_v6_all_balanced.cfg not found.
+  pause
+  exit /b 1
+)
+start "DarkWolf RTCW RT Playable v6" "WolfSP.exe" +set r_dxrNativeResolution 1 +set r_dxrUpscalerBackend 0 +exec dxr_v6_all_balanced.cfg
+endlocal
