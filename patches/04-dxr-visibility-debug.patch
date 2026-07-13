@@ -1,0 +1,330 @@
+diff --git a/src/opengl/gl_d3d12raylight.cpp b/src/opengl/gl_d3d12raylight.cpp
+index 91185ac..c955fca 100644
+--- a/src/opengl/gl_d3d12raylight.cpp
++++ b/src/opengl/gl_d3d12raylight.cpp
+@@ -1544,6 +1544,9 @@ struct glRaytracingLightingConstants_t
+ 	uint32_t enableSpecular;
+ 	uint32_t enableHalfLambert;
+ 	float shadowBias;
++	float exposure;
++	float legacyBlend;
++	uint32_t debugMode;
+ };
+ 
+ struct glRaytracingLightingState_t
+@@ -1619,6 +1622,9 @@ cbuffer LightingCB : register(b0)
+     uint     gEnableSpecular;
+     uint     gEnableHalfLambert;
+     float    gShadowBias;
++    float    gExposure;
++    float    gLegacyBlend;
++    uint     gDebugMode;
+ };
+ 
+ StructuredBuffer<Light> gLights : register(t0);
+@@ -1963,7 +1969,7 @@ float ComputeCavity(uint2 pixel, float3 worldPos, float3 N)
+     float cavity = (weightSum > 0.0) ? (accum / weightSum) : 0.0;
+     cavity = saturate(cavity * 2.0);
+ 
+-    return 1.0 - cavity * 0.18;
++    return 1.0 - cavity * 0.10;
+ }
+ 
+ float3 ComputeSpecular(float3 N, float3 V, float3 L, float3 lightColor, float lightIntensity, float atten, float shadow, float3 baseAlbedo)
+@@ -2024,29 +2030,29 @@ void RayGen()
+     float geoFlag = normalSample.w;
+ 
+     float cavity = ComputeCavity(pixel, worldPos, N);
+-    float microShadow = lerp(0.75, 1.0, cavity);
+-    float3 albedo = baseAlbedo * cavity;
++    float microShadow = lerp(0.90, 1.0, cavity);
++    float3 albedo = lerp(baseAlbedo, baseAlbedo * cavity, 0.35);
+     albedo *= microShadow;
+ 
+-    float aoRay      = ComputeAmbientOcclusion(worldPos, N, pixel);
+-	float ao         = aoRay;
+-    float skyVis  = ComputeSkyVisibility(worldPos, N, pixel);
++    float aoRay = ComputeAmbientOcclusion(worldPos, N, pixel);
++    float ao    = lerp(1.0, aoRay, 0.70);
++    float skyVis = ComputeSkyVisibility(worldPos, N, pixel);
+ 
+     float upness = saturate(N.z * 0.5 + 0.5);
+ 
+     float3 skyColor =
+         float3(0.5, 0.5, 0.5) * (0.35 + 0.65 * upness);
+ 
+-    float skyStrength = 2.0;
++    float skyStrength = 1.35 + gAmbientColor.a * 0.65;
+ 
+-    float3 lightingAccum = 0.2;
++    float3 lightingAccum = gAmbientColor.rgb * gAmbientColor.a;
+     float3 specularAccum = 0.0;
+ 
+     lightingAccum += skyColor * (skyStrength * skyVis);
+ 
+     if (geoFlag == GEOMETRY_FLAG_SKELETAL)
+     {
+-        lightingAccum += 0.2;
++        lightingAccum += 0.15;
+     }
+ 
+     [loop]
+@@ -2150,12 +2156,12 @@ void RayGen()
+     }
+ 
+     lightingAccum *= ao;
+-    specularAccum *= ao;
++    specularAccum *= lerp(1.0, ao, 0.5);
+ 
+     if (geoFlag == GEOMETRY_FLAG_SKELETAL)
+     {
+-        lightingAccum *= 1.2;
+-        specularAccum *= 1.15;
++        lightingAccum *= 1.05;
++        specularAccum *= 1.05;
+     }
+ 
+     if (geoFlag == GEOMETRY_FLAG_UNLIT)
+@@ -2164,7 +2170,31 @@ void RayGen()
+     }
+     else
+     {
+-        float3 finalColor = albedo * lightingAccum + specularAccum;
++        float3 rtLitColor = albedo * lightingAccum + specularAccum;
++        rtLitColor = max(rtLitColor, baseAlbedo * 0.15);
++
++        float legacyKeep = saturate(gLegacyBlend);
++        float3 finalColor = lerp(rtLitColor, baseAlbedo, legacyKeep);
++        finalColor *= max(gExposure, 0.001);
++
++        if (gDebugMode == 1)
++        {
++            finalColor = rtLitColor;
++        }
++        else if (gDebugMode == 2)
++        {
++            float occ = saturate(ao * skyVis);
++            finalColor = float3(occ, occ, occ);
++        }
++        else if (gDebugMode == 3)
++        {
++            finalColor = baseAlbedo;
++        }
++        else if (gDebugMode == 4)
++        {
++            finalColor = lightingAccum / (1.0 + lightingAccum);
++        }
++
+         gOutputTex[pixel] = float4(finalColor, albedoSample.a);
+     }
+ }
+@@ -2617,6 +2647,9 @@ bool glRaytracingLightingInit(void)
+ 	g_glRaytracingLighting.constants.enableHalfLambert = 1;
+ 	g_glRaytracingLighting.constants.normalReconstructZ = 1.0f;
+ 	g_glRaytracingLighting.constants.shadowBias = 0.05f;
++	g_glRaytracingLighting.constants.exposure = 1.15f;
++	g_glRaytracingLighting.constants.legacyBlend = 0.65f;
++	g_glRaytracingLighting.constants.debugMode = 0u;
+ 
+ 	glRaytracingLightingUpdateConstants();
+ 
+@@ -2745,6 +2778,24 @@ void glRaytracingLightingSetShadowBias(float bias)
+ 	glRaytracingLightingUpdateConstants();
+ }
+ 
++void glRaytracingLightingSetExposure(float exposure)
++{
++	g_glRaytracingLighting.constants.exposure = exposure;
++	glRaytracingLightingUpdateConstants();
++}
++
++void glRaytracingLightingSetLegacyBlend(float legacyBlend)
++{
++	g_glRaytracingLighting.constants.legacyBlend = legacyBlend;
++	glRaytracingLightingUpdateConstants();
++}
++
++void glRaytracingLightingSetDebugMode(uint32_t mode)
++{
++	g_glRaytracingLighting.constants.debugMode = mode;
++	glRaytracingLightingUpdateConstants();
++}
++
+ bool glRaytracingLightingExecute(const glRaytracingLightingPassDesc_t* pass)
+ {
+ 	if (!g_glRaytracingLighting.initialized || !pass)
+diff --git a/src/opengl/opengl.h b/src/opengl/opengl.h
+index fbffbae..2346afb 100644
+--- a/src/opengl/opengl.h
++++ b/src/opengl/opengl.h
+@@ -1707,6 +1707,9 @@ void                       glRaytracingLightingSetNormalReconstructSign(float si
+ void                       glRaytracingLightingEnableSpecular(int enable);
+ void                       glRaytracingLightingEnableHalfLambert(int enable);
+ void                       glRaytracingLightingSetShadowBias(float bias);
++void                       glRaytracingLightingSetExposure(float exposure);
++void                       glRaytracingLightingSetLegacyBlend(float legacyBlend);
++void                       glRaytracingLightingSetDebugMode(uint32_t mode);
+ 
+ bool                       glRaytracingLightingExecute(const glRaytracingLightingPassDesc_t* pass);
+ 
+diff --git a/src/renderer/tr_backend.cpp b/src/renderer/tr_backend.cpp
+index c08815d..1204b8e 100644
+--- a/src/renderer/tr_backend.cpp
++++ b/src/renderer/tr_backend.cpp
+@@ -1120,33 +1120,30 @@ static void RB_AddDXRFallbackLightIfNeeded(void)
+ 		return;
+ 	}
+ 
+-	if (glRaytracingLightingGetLightCount() > 0)
+-	{
+-		return;
+-	}
+-
+ 	const float radius = (r_dxrFallbackLightRadius && r_dxrFallbackLightRadius->value > 1.0f)
+ 		? r_dxrFallbackLightRadius->value
+-		: 384.0f;
++		: 900.0f;
+ 	const float intensity = (r_dxrFallbackLightIntensity && r_dxrFallbackLightIntensity->value > 0.0f)
+ 		? r_dxrFallbackLightIntensity->value
+-		: 2.0f;
++		: 6.0f;
+ 
+ 	vec3_t lightOrg;
+ 	VectorCopy(backEnd.refdef.vieworg, lightOrg);
+-	VectorMA(lightOrg, 96.0f, backEnd.refdef.viewaxis[0], lightOrg);
+-	VectorMA(lightOrg, 48.0f, backEnd.refdef.viewaxis[2], lightOrg);
++	VectorMA(lightOrg, 128.0f, backEnd.refdef.viewaxis[0], lightOrg);
++	VectorMA(lightOrg, 72.0f, backEnd.refdef.viewaxis[2], lightOrg);
+ 
+ 	glRaytracingLight_t light = glRaytracingLightingMakePointLight(
+ 		lightOrg[0], lightOrg[1], lightOrg[2],
+ 		radius,
+-		1.0f, 0.90f, 0.72f,
++		1.00f, 0.96f, 0.90f,
+ 		intensity);
+ 	glRaytracingLightingAddLight(&light);
+ }
+ 
+ static void RB_RunRaytracedLightingPass(void)
+ {
++	static int s_lastDXRDebugPrintTime = 0;
++
+ 	if (backEnd.raytraceRendered || !RB_DXRShouldRenderLighting())
+ 	{
+ 		return;
+@@ -1159,8 +1156,66 @@ static void RB_RunRaytracedLightingPass(void)
+ 		glRaytracingLightingSetShadowBias(r_dxrShadowBias->value);
+ 	}
+ 
++	if (r_dxrAmbientIntensity)
++	{
++		glRaytracingLightingSetAmbient(0.14f, 0.14f, 0.16f, r_dxrAmbientIntensity->value);
++	}
++	else
++	{
++		glRaytracingLightingSetAmbient(0.14f, 0.14f, 0.16f, 1.35f);
++	}
++
++	if (r_dxrExposure)
++	{
++		glRaytracingLightingSetExposure(r_dxrExposure->value);
++	}
++	else
++	{
++		glRaytracingLightingSetExposure(1.15f);
++	}
++
++	if (r_dxrLegacyBlend)
++	{
++		glRaytracingLightingSetLegacyBlend(r_dxrLegacyBlend->value);
++	}
++	else
++	{
++		glRaytracingLightingSetLegacyBlend(0.65f);
++	}
++
++	if (r_dxrDebugMode)
++	{
++		glRaytracingLightingSetDebugMode((uint32_t)r_dxrDebugMode->integer);
++	}
++	else
++	{
++		glRaytracingLightingSetDebugMode(0);
++	}
++
+ 	RB_AddDXRFallbackLightIfNeeded();
+ 
++	if (r_dxrDebug && r_dxrDebug->integer)
++	{
++		const int now = ri.Milliseconds();
++		if (now - s_lastDXRDebugPrintTime > 1000)
++		{
++			s_lastDXRDebugPrintTime = now;
++			ri.Printf(PRINT_ALL,
++				"DXR: meshes=%u instances=%u lights=%u fallback=%d radius=%.1f intensity=%.2f bias=%.4f ambient=%.2f legacy=%.2f exposure=%.2f debugMode=%d\n",
++				glRaytracingGetMeshCount(),
++				glRaytracingGetInstanceCount(),
++				glRaytracingLightingGetLightCount(),
++				r_dxrFallbackLight ? r_dxrFallbackLight->integer : 0,
++				r_dxrFallbackLightRadius ? r_dxrFallbackLightRadius->value : 0.0f,
++				r_dxrFallbackLightIntensity ? r_dxrFallbackLightIntensity->value : 0.0f,
++				r_dxrShadowBias ? r_dxrShadowBias->value : 0.0f,
++				r_dxrAmbientIntensity ? r_dxrAmbientIntensity->value : 0.0f,
++				r_dxrLegacyBlend ? r_dxrLegacyBlend->value : 0.0f,
++				r_dxrExposure ? r_dxrExposure->value : 0.0f,
++				r_dxrDebugMode ? r_dxrDebugMode->integer : 0);
++		}
++	}
++
+ 	glFinish();
+ 	glLightScene();
+ 	glRaytracingLightingClearLights(false);
+diff --git a/src/renderer/tr_init.cpp b/src/renderer/tr_init.cpp
+index a44238f..e85310b 100644
+--- a/src/renderer/tr_init.cpp
++++ b/src/renderer/tr_init.cpp
+@@ -75,6 +75,11 @@ cvar_t  *r_dlightBacks;
+ cvar_t  *r_dlightScale; //----(SA)	added
+ cvar_t  *r_dxr;
+ cvar_t  *r_dxrShadowBias;
++cvar_t  *r_dxrAmbientIntensity;
++cvar_t  *r_dxrLegacyBlend;
++cvar_t  *r_dxrExposure;
++cvar_t  *r_dxrDebug;
++cvar_t  *r_dxrDebugMode;
+ cvar_t  *r_dxrFallbackLight;
+ cvar_t  *r_dxrFallbackLightRadius;
+ cvar_t  *r_dxrFallbackLightIntensity;
+@@ -989,9 +994,14 @@ void R_Register( void ) {
+ 	r_dlightBacks = ri.Cvar_Get( "r_dlightBacks", "1", CVAR_ARCHIVE );
+ 	r_dxr = ri.Cvar_Get( "r_dxr", "1", CVAR_ARCHIVE );
+ 	r_dxrShadowBias = ri.Cvar_Get( "r_dxrShadowBias", "0.05", CVAR_ARCHIVE );
++	r_dxrAmbientIntensity = ri.Cvar_Get( "r_dxrAmbientIntensity", "1.35", CVAR_ARCHIVE );
++	r_dxrLegacyBlend = ri.Cvar_Get( "r_dxrLegacyBlend", "0.65", CVAR_ARCHIVE );
++	r_dxrExposure = ri.Cvar_Get( "r_dxrExposure", "1.15", CVAR_ARCHIVE );
++	r_dxrDebug = ri.Cvar_Get( "r_dxrDebug", "0", CVAR_ARCHIVE );
++	r_dxrDebugMode = ri.Cvar_Get( "r_dxrDebugMode", "0", CVAR_ARCHIVE );
+ 	r_dxrFallbackLight = ri.Cvar_Get( "r_dxrFallbackLight", "0", CVAR_ARCHIVE );
+-	r_dxrFallbackLightRadius = ri.Cvar_Get( "r_dxrFallbackLightRadius", "384", CVAR_ARCHIVE );
+-	r_dxrFallbackLightIntensity = ri.Cvar_Get( "r_dxrFallbackLightIntensity", "2.0", CVAR_ARCHIVE );
++	r_dxrFallbackLightRadius = ri.Cvar_Get( "r_dxrFallbackLightRadius", "900", CVAR_ARCHIVE );
++	r_dxrFallbackLightIntensity = ri.Cvar_Get( "r_dxrFallbackLightIntensity", "6.0", CVAR_ARCHIVE );
+ 	r_finish = ri.Cvar_Get( "r_finish", "0", CVAR_ARCHIVE );
+ 	r_textureMode = ri.Cvar_Get( "r_textureMode", "GL_LINEAR_MIPMAP_NEAREST", CVAR_ARCHIVE );
+ 	r_swapInterval = ri.Cvar_Get( "r_swapInterval", "0", CVAR_ARCHIVE );
+diff --git a/src/renderer/tr_local.h b/src/renderer/tr_local.h
+index c0992d2..1816efa 100644
+--- a/src/renderer/tr_local.h
++++ b/src/renderer/tr_local.h
+@@ -1130,6 +1130,11 @@ extern cvar_t   *r_dlightScale;         // global user attenuation of dlights
+ extern cvar_t   *r_dlightBacks;         // dlight non-facing surfaces for continuity
+ extern cvar_t   *r_dxr;                 // DXR lighting enabled/disabled
+ extern cvar_t   *r_dxrShadowBias;       // DXR shadow ray origin bias
++extern cvar_t   *r_dxrAmbientIntensity; // global ambient lift for the DXR resolve
++extern cvar_t   *r_dxrLegacyBlend;      // how much of the original RTCW shading is preserved
++extern cvar_t   *r_dxrExposure;         // post exposure applied to the DXR resolve
++extern cvar_t   *r_dxrDebug;            // periodic DXR state logging to the console
++extern cvar_t   *r_dxrDebugMode;        // 0 normal, 1 lighting only, 2 occlusion, 3 albedo, 4 lighting heatmap
+ extern cvar_t   *r_dxrFallbackLight;    // optional camera-side test light for verification
+ extern cvar_t   *r_dxrFallbackLightRadius;
+ extern cvar_t   *r_dxrFallbackLightIntensity;

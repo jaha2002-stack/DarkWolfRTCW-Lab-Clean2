@@ -1,0 +1,108 @@
+diff --git a/src/opengl/gl_d3d12raylight.cpp b/src/opengl/gl_d3d12raylight.cpp
+index 4f50aee..47d971d 100644
+--- a/src/opengl/gl_d3d12raylight.cpp
++++ b/src/opengl/gl_d3d12raylight.cpp
+@@ -16,6 +16,7 @@ extern void __cdecl Com_Printf(const char* fmt, ...);
+ #include <thread>
+ #include <atomic>
+ #include <algorithm>
++#include <string>
+ #include <string.h>
+ #include <stdio.h>
+ #include <stdarg.h>
+@@ -1777,8 +1778,9 @@ struct glRaytracingLightingState_t
+ static glRaytracingLightingState_t g_glRaytracingLighting;
+ static const UINT GL_RAYTRACING_LAB_DESCRIPTORS_PER_PASS = 9;
+ static const UINT GL_RAYTRACING_LAB_PASS_COUNT = 2;
+-static const char* g_glRaytracingLightingHlsl = R"(
+-struct Light
++static const char* const g_glRaytracingLightingHlslParts[] =
++{
++R"DXRHLSL(struct Light
+ {
+     float3 position;
+     float  radius;
+@@ -2044,7 +2046,8 @@ float PointLightShadow(float3 worldPos, float3 N, Light light, float3 toLight, f
+     [loop]
+     for (uint s = 0; s < sampleCount; ++s)
+     {
+-        float2 disk = (sampleCount == 1) ? float2(0.0, 0.0) : ConcentricSampleDisk(Hammersley2D(s, sampleCount, seed));
++)DXRHLSL",
++R"DXRHLSL(        float2 disk = (sampleCount == 1) ? float2(0.0, 0.0) : ConcentricSampleDisk(Hammersley2D(s, sampleCount, seed));
+         float3 samplePos = light.position + tangent * disk.x * areaRadius + bitangent * disk.y * areaRadius;
+         float3 sampleVec = samplePos - worldPos;
+         float sampleDist = length(sampleVec);
+@@ -2213,7 +2216,8 @@ float3 ComputeGI(float3 worldPos, float3 N, float3 baseAlbedo, uint2 pixel)
+     for (uint i = 0; i < sampleCount; ++i)
+     {
+         float3 h = CosineSampleHemisphere(Hammersley2D(i, sampleCount, seed));
+-        float3 dir = normalize(tangent * h.x + bitangent * h.y + N * h.z);
++)DXRHLSL",
++R"DXRHLSL(        float3 dir = normalize(tangent * h.x + bitangent * h.y + N * h.z);
+         float visibility = TraceVisibility(worldPos + N * max(gShadowBias, 0.002), dir, max(gGIMaxDistance, 8.0));
+         accum += (SkyColorForDirection(dir) * 0.55 + gAmbientColor.rgb * 0.45) * visibility;
+     }
+@@ -2368,7 +2372,8 @@ float4 ResolveLabPixel(uint2 pixel)
+             for (int xx = -1; xx <= 1; ++xx)
+             {
+                 int2 sp = clamp(int2(pixel) + int2(xx, yy), int2(0, 0), int2((int)gScreenSize.x - 1, (int)gScreenSize.y - 1));
+-                float3 c = gRawLightingTex.Load(int3(sp, 0)).rgb;
++)DXRHLSL",
++R"DXRHLSL(                float3 c = gRawLightingTex.Load(int3(sp, 0)).rgb;
+                 float3 a = gAlbedoTex.Load(int3(sp, 0)).rgb;
+                 float3 residual = c - a * saturate(gLegacyBlend) * max(gExposure, 0.001);
+                 minResidual = min(minResidual, residual);
+@@ -2530,7 +2535,8 @@ void RayGen()
+         if (gDebugMode == 1)
+             finalColor = rtLitColor;
+         else if (gDebugMode == 2)
+-            finalColor = (ao * skyVisibility).xxx;
++)DXRHLSL",
++R"DXRHLSL(            finalColor = (ao * skyVisibility).xxx;
+         else if (gDebugMode == 3)
+             finalColor = baseAlbedo;
+         else if (gDebugMode == 4)
+@@ -2551,10 +2557,22 @@ void RayGen()
+     if (!NeedsResolvePass())
+         finalColor = ApplyOutputPost(finalColor);
+     gOutputTex[pixel] = float4(finalColor, albedoSample.a);
++})DXRHLSL",
++};
++
++static std::string glRaytracingBuildLightingHlslSource()
++{
++	std::string source;
++	size_t totalSize = 0;
++	for (size_t i = 0; i < _countof(g_glRaytracingLightingHlslParts); ++i)
++		totalSize += strlen(g_glRaytracingLightingHlslParts[i]);
++	source.reserve(totalSize);
++	for (size_t i = 0; i < _countof(g_glRaytracingLightingHlslParts); ++i)
++		source.append(g_glRaytracingLightingHlslParts[i]);
++	return source;
+ }
+-)";
+ 
+-static ComPtr<IDxcBlob> glRaytracingLightingCompileLibrary(const char* src)
++static ComPtr<IDxcBlob> glRaytracingLightingCompileLibrary(const char* src, size_t srcSize)
+ {
+ 	ComPtr<IDxcUtils> utils;
+ 	ComPtr<IDxcCompiler3> compiler;
+@@ -2583,7 +2601,7 @@ static ComPtr<IDxcBlob> glRaytracingLightingCompileLibrary(const char* src)
+ 
+ 	DxcBuffer source = {};
+ 	source.Ptr = src;
+-	source.Size = strlen(src);
++	source.Size = srcSize;
+ 	source.Encoding = DXC_CP_UTF8;
+ 
+ 	const wchar_t* args[] =
+@@ -2786,7 +2804,8 @@ static void glRaytracingLightingCreatePersistentLightSRV(void)
+ 
+ static int glRaytracingLightingCreateStateObject(void)
+ {
+-	ComPtr<IDxcBlob> dxil = glRaytracingLightingCompileLibrary(g_glRaytracingLightingHlsl);
++	const std::string hlslSource = glRaytracingBuildLightingHlslSource();
++	ComPtr<IDxcBlob> dxil = glRaytracingLightingCompileLibrary(hlslSource.c_str(), hlslSource.size());
+ 	if (!dxil)
+ 		return 0;
+ 

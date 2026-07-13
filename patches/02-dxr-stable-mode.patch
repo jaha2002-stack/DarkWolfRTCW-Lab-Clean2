@@ -1,0 +1,422 @@
+diff --git a/src/opengl/gl_d3d12raylight.cpp b/src/opengl/gl_d3d12raylight.cpp
+index 00d04fb..91185ac 100644
+--- a/src/opengl/gl_d3d12raylight.cpp
++++ b/src/opengl/gl_d3d12raylight.cpp
+@@ -221,6 +221,14 @@ static glRaytracingCmdContext_t g_glRaytracingCmd;
+ 
+ static void glRaytracingWaitFenceValue(UINT64 value)
+ {
++	if (!value || !g_glRaytracingCmd.fence || !g_glRaytracingCmd.fenceEvent)
++		return;
++
++	if (g_glRaytracingCmd.fence->GetCompletedValue() >= value)
++		return;
++
++	g_glRaytracingCmd.fence->SetEventOnCompletion(value, g_glRaytracingCmd.fenceEvent);
++	WaitForSingleObject(g_glRaytracingCmd.fenceEvent, INFINITE);
+ }
+ 
+ static UINT64 glRaytracingSignalQueue(void)
+@@ -235,6 +243,8 @@ static UINT64 glRaytracingSignalQueue(void)
+ 
+ static void glRaytracingWaitIdle(void)
+ {
++	UINT64 value = glRaytracingSignalQueue();
++	glRaytracingWaitFenceValue(value);
+ }
+ 
+ static int glRaytracingInitCmdContext(void)
+@@ -252,6 +262,18 @@ static int glRaytracingInitCmdContext(void)
+ 	}
+ 
+ 	GLR_CHECK(baseDevice->QueryInterface(IID_PPV_ARGS(&g_glRaytracingCmd.device)));
++
++	D3D12_FEATURE_DATA_D3D12_OPTIONS5 options5 = {};
++	HRESULT optionsHr = g_glRaytracingCmd.device->CheckFeatureSupport(
++		D3D12_FEATURE_D3D12_OPTIONS5,
++		&options5,
++		sizeof(options5));
++	if (FAILED(optionsHr) || options5.RaytracingTier == D3D12_RAYTRACING_TIER_NOT_SUPPORTED)
++	{
++		glRaytracingFatal("D3D12 device does not report DXR raytracing support");
++		return 0;
++	}
++
+ 	g_glRaytracingCmd.queue = baseQueue;
+ 
+ 	GLR_CHECK(g_glRaytracingCmd.device->CreateCommandAllocator(
+@@ -327,8 +349,7 @@ static void glRaytracingShutdownCmdContext(void)
+ 
+ static int glRaytracingBeginCmd(void)
+ {
+-	//glRaytracingWaitFenceValue
+-		//(g_glRaytracingCmd.cmdLastFenceValue);
++	glRaytracingWaitFenceValue(g_glRaytracingCmd.cmdLastFenceValue);
+ 
+ 	GLR_CHECK(g_glRaytracingCmd.cmdAlloc->Reset());
+ 	GLR_CHECK(g_glRaytracingCmd.cmdList->Reset(g_glRaytracingCmd.cmdAlloc.Get(), nullptr));
+@@ -342,15 +363,14 @@ static int glRaytracingEndCmd(void)
+ 	ID3D12CommandList* lists[] = { g_glRaytracingCmd.cmdList.Get() };
+ 	g_glRaytracingCmd.queue->ExecuteCommandLists(1, lists);
+ 
+-	g_glRaytracingCmd.cmdLastFenceValue =
+-    glRaytracingSignalQueue();
++	g_glRaytracingCmd.cmdLastFenceValue = glRaytracingSignalQueue();
+ 
+-return 1;
++	return 1;
+ }
+ 
+ static int glRaytracingBeginBlasCmd(void)
+ {
+-	//glRaytracingWaitFenceValue(g_glRaytracingCmd.blasLastFenceValue);
++	glRaytracingWaitFenceValue(g_glRaytracingCmd.blasLastFenceValue);
+ 
+ 	GLR_CHECK(g_glRaytracingCmd.blasCmdAlloc->Reset());
+ 	GLR_CHECK(g_glRaytracingCmd.blasCmdList->Reset(g_glRaytracingCmd.blasCmdAlloc.Get(), nullptr));
+@@ -980,7 +1000,7 @@ static int glRaytracingBuildDirtyMeshesInternal(void)
+ 	if (!blasFenceValue)
+ 		return 0;
+ 
+-	//glRaytracingWaitFenceValue(blasFenceValue);
++	glRaytracingWaitFenceValue(blasFenceValue);
+ 
+ 	for (size_t i = 0; i < builds.size(); ++i)
+ 	{
+@@ -1188,7 +1208,7 @@ static int glRaytracingBuildSceneInternal(void)
+ 	glRaytracingBuffer_t* dstTLAS = glRaytracingGetBuildTLASBuffer();
+ 	const glRaytracingBuffer_t* srcTLAS = glRaytracingGetCurrentTLASBufferConst();
+ 
+-	//glRaytracingWaitFenceValue(g_glRaytracingCmd.blasLastFenceValue);
++	glRaytracingWaitFenceValue(g_glRaytracingCmd.blasLastFenceValue);
+ 
+ 	if (!glRaytracingBeginTlasCmd())
+ 		return 0;
+@@ -1216,7 +1236,7 @@ static int glRaytracingBuildSceneInternal(void)
+ 	if (!tlasFenceValue)
+ 		return 0;
+ 
+-	//glRaytracingWaitFenceValue(tlasFenceValue);
++	glRaytracingWaitFenceValue(tlasFenceValue);
+ 
+ 	g_glRaytracingScene.currentTLASIndex = glRaytracingGetInactiveTLASIndex();
+ 	g_glRaytracingScene.activeInstanceCount = activeCount;
+@@ -2596,7 +2616,7 @@ bool glRaytracingLightingInit(void)
+ 	g_glRaytracingLighting.constants.enableSpecular = 1;
+ 	g_glRaytracingLighting.constants.enableHalfLambert = 1;
+ 	g_glRaytracingLighting.constants.normalReconstructZ = 1.0f;
+-	g_glRaytracingLighting.constants.shadowBias = 1.5f;
++	g_glRaytracingLighting.constants.shadowBias = 0.05f;
+ 
+ 	glRaytracingLightingUpdateConstants();
+ 
+@@ -2809,47 +2829,23 @@ bool glRaytracingLightingExecute(const glRaytracingLightingPassDesc_t* pass)
+ 	uav.UAV.pResource = pass->outputTexture;
+ 	g_glRaytracingCmd.cmdList->ResourceBarrier(1, &uav);
+ 
+-	ID3D12Resource* backBuffer = QD3D12_GetCurrentBackBuffer();
+-	if (backBuffer)
+-	{
+-		glRaytracingTransition(
+-			g_glRaytracingCmd.cmdList.Get(),
+-			pass->outputTexture,
+-			D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+-			D3D12_RESOURCE_STATE_COPY_SOURCE);
+-
+-		glRaytracingTransition(
+-			g_glRaytracingCmd.cmdList.Get(),
+-			backBuffer,
+-			D3D12_RESOURCE_STATE_PRESENT,
+-			D3D12_RESOURCE_STATE_COPY_DEST);
+-
+-		g_glRaytracingCmd.cmdList->CopyResource(backBuffer, pass->outputTexture);
+-
+-		glRaytracingTransition(
+-			g_glRaytracingCmd.cmdList.Get(),
+-			backBuffer,
+-			D3D12_RESOURCE_STATE_COPY_DEST,
+-			D3D12_RESOURCE_STATE_PRESENT);
+-
+-		glRaytracingTransition(
+-			g_glRaytracingCmd.cmdList.Get(),
+-			pass->outputTexture,
+-			D3D12_RESOURCE_STATE_COPY_SOURCE,
+-			D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+-	}
+-	else
+-	{
+-		glRaytracingTransition(
+-			g_glRaytracingCmd.cmdList.Get(),
+-			pass->outputTexture,
+-			D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+-			D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+-	}
++	// The shim composites the lighting texture later in glLightScene().  Do not
++	// copy directly to the swapchain here; doing so races the normal backbuffer
++	// resolve/upscale path and can be overwritten before Present.
++	glRaytracingTransition(
++		g_glRaytracingCmd.cmdList.Get(),
++		pass->outputTexture,
++		D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
++		D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+ 
+ 	if (!glRaytracingEndCmd())
+ 		return false;
+ 
++	// Stable mode keeps the external DXR command list synchronous with the
++	// OpenGL shim.  This is slower than a fully pipelined renderer, but it
++	// avoids read-after-write hazards while validating the ray traced path.
++	glRaytracingWaitFenceValue(g_glRaytracingCmd.cmdLastFenceValue);
++
+ 	return true;
+ }
+ 
+diff --git a/src/opengl/gl_d3d12shim.cpp b/src/opengl/gl_d3d12shim.cpp
+index 8a07ebe..815cb66 100644
+--- a/src/opengl/gl_d3d12shim.cpp
++++ b/src/opengl/gl_d3d12shim.cpp
+@@ -9491,16 +9491,20 @@ void glLightScene(void)
+ 	if (!g_gl.device || !g_gl.cmdList)
+ 		return;
+ 
++	if (!glRaytracingLightingIsInitialized())
++		return;
++
+ 	QD3D12_EnsureFrameOpen();
+ 
+ 	TextureResource* lightingTex = QD3D12_EnsureLightingTexture(width, height);
+ 	if (!lightingTex || !lightingTex->texture)
+ 		return;
+ 
+-	glRaytracingBuildScene();
+-
+ 	QD3D12_FlushQueuedBatches();
+ 
++	if (!glRaytracingBuildScene())
++		return;
++
+ 	ID3D12GraphicsCommandList* cl = g_gl.cmdList.Get();
+ 	ID3D12Resource* sceneColor = g_currentWindow->sceneColorBuffers[g_currentWindow->frameIndex].Get();
+ 	ID3D12Resource* sceneNormal = g_currentWindow->normalBuffers[g_currentWindow->frameIndex].Get();
+@@ -9598,7 +9602,8 @@ void glLightScene(void)
+ 		return;
+ 	}
+ 
+-	g_lightingTextureState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
++	// glRaytracingLightingExecute leaves the output texture in SRV state.
++	g_lightingTextureState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+ 
+ 	QD3D12_RunRayAIDenoiseIfEnabled(cl, *g_currentWindow, lightingTex->texture.Get());
+ 
+diff --git a/src/renderer/tr_backend.cpp b/src/renderer/tr_backend.cpp
+index 56f388e..c08815d 100644
+--- a/src/renderer/tr_backend.cpp
++++ b/src/renderer/tr_backend.cpp
+@@ -997,11 +997,6 @@ void RB_UpdateDXRMesh(trDXRMesh_t* mesh, int currentFrame, int surfaceId, int st
+ 		return;
+ 	}
+ 
+-	if (mesh->cachedFrame == currentFrame)
+-	{
+-		return;
+-	}
+-
+ 	if (surfaceId < 0 || surfaceId >= MAX_DXR_SURFACES)
+ 	{
+ 		return;
+@@ -1044,6 +1039,13 @@ void RB_UpdateDXRMesh(trDXRMesh_t* mesh, int currentFrame, int surfaceId, int st
+ 		vertices[i].xyz[0] = tess.xyz[srcVert][0];
+ 		vertices[i].xyz[1] = tess.xyz[srcVert][1];
+ 		vertices[i].xyz[2] = tess.xyz[srcVert][2];
++
++		vertices[i].normal[0] = tess.normal[srcVert][0];
++		vertices[i].normal[1] = tess.normal[srcVert][1];
++		vertices[i].normal[2] = tess.normal[srcVert][2];
++
++		vertices[i].st[0] = tess.texCoords[srcVert][0][0];
++		vertices[i].st[1] = tess.texCoords[srcVert][0][1];
+ 	}
+ 
+ 	for (int i = 0; i < indexCount; ++i)
+@@ -1057,6 +1059,8 @@ void RB_UpdateDXRMesh(trDXRMesh_t* mesh, int currentFrame, int surfaceId, int st
+ 	desc.vertexCount = (uint32_t)vertexCount;
+ 	desc.indices = indices.data();
+ 	desc.indexCount = (uint32_t)indexCount;
++	desc.allowUpdate = qtrue;
++	desc.opaque = qtrue;
+ 
+ 	if (!surf->dxrMeshHandle)
+ 	{
+@@ -1071,7 +1075,6 @@ void RB_UpdateDXRMesh(trDXRMesh_t* mesh, int currentFrame, int surfaceId, int st
+ 		}
+ 	}
+ 
+-	mesh->cachedFrame = currentFrame;
+ }
+ 
+ /*
+@@ -1090,6 +1093,79 @@ void RB_UpdateDrawSurfFlags(drawSurf_t* surf, shader_t *shader)
+ 	}
+ }
+ 
++static qboolean RB_DXRShouldRenderLighting(void)
++{
++	if (r_dxr && !r_dxr->integer)
++	{
++		return qfalse;
++	}
++
++	if (backEnd.refdef.rdflags & RDF_SKYBOXPORTAL)
++	{
++		return qfalse;
++	}
++
++	if (!glRaytracingLightingIsInitialized())
++	{
++		return qfalse;
++	}
++
++	return qtrue;
++}
++
++static void RB_AddDXRFallbackLightIfNeeded(void)
++{
++	if (!r_dxrFallbackLight || !r_dxrFallbackLight->integer)
++	{
++		return;
++	}
++
++	if (glRaytracingLightingGetLightCount() > 0)
++	{
++		return;
++	}
++
++	const float radius = (r_dxrFallbackLightRadius && r_dxrFallbackLightRadius->value > 1.0f)
++		? r_dxrFallbackLightRadius->value
++		: 384.0f;
++	const float intensity = (r_dxrFallbackLightIntensity && r_dxrFallbackLightIntensity->value > 0.0f)
++		? r_dxrFallbackLightIntensity->value
++		: 2.0f;
++
++	vec3_t lightOrg;
++	VectorCopy(backEnd.refdef.vieworg, lightOrg);
++	VectorMA(lightOrg, 96.0f, backEnd.refdef.viewaxis[0], lightOrg);
++	VectorMA(lightOrg, 48.0f, backEnd.refdef.viewaxis[2], lightOrg);
++
++	glRaytracingLight_t light = glRaytracingLightingMakePointLight(
++		lightOrg[0], lightOrg[1], lightOrg[2],
++		radius,
++		1.0f, 0.90f, 0.72f,
++		intensity);
++	glRaytracingLightingAddLight(&light);
++}
++
++static void RB_RunRaytracedLightingPass(void)
++{
++	if (backEnd.raytraceRendered || !RB_DXRShouldRenderLighting())
++	{
++		return;
++	}
++
++	backEnd.raytraceRendered = qtrue;
++
++	if (r_dxrShadowBias)
++	{
++		glRaytracingLightingSetShadowBias(r_dxrShadowBias->value);
++	}
++
++	RB_AddDXRFallbackLightIfNeeded();
++
++	glFinish();
++	glLightScene();
++	glRaytracingLightingClearLights(false);
++}
++
+ /*
+ ==================
+ RB_RenderDrawSurfList
+@@ -1219,12 +1295,9 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+ 			oldAtiTess = atiTess;
+ 		}
+ 
+-// jmarshall - in non skyportal passes we want to render raytracing, but just before the first bleding passes. 
+-		if (shader->sort > SS_OPAQUE && !backEnd.raytraceRendered && !(backEnd.refdef.rdflags & RDF_SKYBOXPORTAL)) {
+-			backEnd.raytraceRendered = true;
+-			glFinish();
+-			glLightScene();
+-			glRaytracingLightingClearLights(false);
++// jmarshall - in non skyportal passes we want to render raytracing, but just before the first blending passes.
++		if (shader->sort > SS_OPAQUE) {
++			RB_RunRaytracedLightingPass();
+ 		}
+ // jmarshall end
+ 		//
+@@ -1342,6 +1415,10 @@ void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs ) {
+ 	// add light flares on lights that aren't obscured
+ 	RB_RenderFlares();
+ 
++	// Some RTCW views have no transparent batch.  In that case the shader-sort
++	// hook above never fires, so execute DXR before 2D UI commands.
++	RB_RunRaytracedLightingPass();
++
+ #ifdef __MACOS__
+ 	Sys_PumpEvents();       // crutch up the mac's limited buffer queue size
+ #endif
+@@ -1492,12 +1569,7 @@ const void* RB_Raytrace(const void* data) {
+ 	const raytraceRenderCommand_t* cmd;
+ 	cmd = (const raytraceRenderCommand_t*)data;
+ 
+-	if (!backEnd.raytraceRendered) {
+-		backEnd.raytraceRendered = true;
+-		glFinish();
+-		glLightScene();
+-		glRaytracingLightingClearLights(false);
+-	}
++	RB_RunRaytracedLightingPass();
+ 
+ 	return (const void*)(cmd + 1);
+ }
+diff --git a/src/renderer/tr_init.cpp b/src/renderer/tr_init.cpp
+index 11c14d0..a44238f 100644
+--- a/src/renderer/tr_init.cpp
++++ b/src/renderer/tr_init.cpp
+@@ -73,6 +73,11 @@ cvar_t  *r_drawSun;
+ cvar_t  *r_dynamiclight;
+ cvar_t  *r_dlightBacks;
+ cvar_t  *r_dlightScale; //----(SA)	added
++cvar_t  *r_dxr;
++cvar_t  *r_dxrShadowBias;
++cvar_t  *r_dxrFallbackLight;
++cvar_t  *r_dxrFallbackLightRadius;
++cvar_t  *r_dxrFallbackLightIntensity;
+ 
+ cvar_t  *r_waterFogColor;   //----(SA)	added
+ cvar_t  *r_mapFogColor;
+@@ -982,6 +987,11 @@ void R_Register( void ) {
+ 	r_dynamiclight = ri.Cvar_Get( "r_dynamiclight", "1", CVAR_ARCHIVE );
+ 	r_dlightScale = ri.Cvar_Get( "r_dlightScale", "1.0", CVAR_ARCHIVE );   //----(SA)	added
+ 	r_dlightBacks = ri.Cvar_Get( "r_dlightBacks", "1", CVAR_ARCHIVE );
++	r_dxr = ri.Cvar_Get( "r_dxr", "1", CVAR_ARCHIVE );
++	r_dxrShadowBias = ri.Cvar_Get( "r_dxrShadowBias", "0.05", CVAR_ARCHIVE );
++	r_dxrFallbackLight = ri.Cvar_Get( "r_dxrFallbackLight", "0", CVAR_ARCHIVE );
++	r_dxrFallbackLightRadius = ri.Cvar_Get( "r_dxrFallbackLightRadius", "384", CVAR_ARCHIVE );
++	r_dxrFallbackLightIntensity = ri.Cvar_Get( "r_dxrFallbackLightIntensity", "2.0", CVAR_ARCHIVE );
+ 	r_finish = ri.Cvar_Get( "r_finish", "0", CVAR_ARCHIVE );
+ 	r_textureMode = ri.Cvar_Get( "r_textureMode", "GL_LINEAR_MIPMAP_NEAREST", CVAR_ARCHIVE );
+ 	r_swapInterval = ri.Cvar_Get( "r_swapInterval", "0", CVAR_ARCHIVE );
+diff --git a/src/renderer/tr_local.h b/src/renderer/tr_local.h
+index ab21605..c0992d2 100644
+--- a/src/renderer/tr_local.h
++++ b/src/renderer/tr_local.h
+@@ -1128,6 +1128,11 @@ extern cvar_t   *r_drawSun;             // controls drawing of sun quad
+ extern cvar_t   *r_dynamiclight;        // dynamic lights enabled/disabled
+ extern cvar_t   *r_dlightScale;         // global user attenuation of dlights
+ extern cvar_t   *r_dlightBacks;         // dlight non-facing surfaces for continuity
++extern cvar_t   *r_dxr;                 // DXR lighting enabled/disabled
++extern cvar_t   *r_dxrShadowBias;       // DXR shadow ray origin bias
++extern cvar_t   *r_dxrFallbackLight;    // optional camera-side test light for verification
++extern cvar_t   *r_dxrFallbackLightRadius;
++extern cvar_t   *r_dxrFallbackLightIntensity;
+ 
+ extern cvar_t  *r_norefresh;            // bypasses the ref rendering
+ extern cvar_t  *r_drawentities;         // disable/enable entity rendering

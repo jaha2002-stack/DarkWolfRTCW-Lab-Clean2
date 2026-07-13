@@ -1,0 +1,75 @@
+diff --git a/src/botlib/be_aas_route.cpp b/src/botlib/be_aas_route.cpp
+--- a/src/botlib/be_aas_route.cpp
++++ b/src/botlib/be_aas_route.cpp
+@@ -899,7 +899,7 @@
+ } routecacheheader_t;
+ 
+ #define RCID                        ( ( 'C' << 24 ) + ( 'R' << 16 ) + ( 'E' << 8 ) + 'M' )
+-#define RCVERSION                   15
++#define RCVERSION                   16 // invalidate stale route caches after x64 VIS fixes
+ 
+ void AAS_DecompressVis( byte *in, int numareas, byte *decompressed );
+ int AAS_CompressVis( byte *vis, int numareas, byte *dest );
+@@ -2050,43 +2050,38 @@
+ void AAS_DecompressVis( byte *in, int numareas, byte *decompressed ) {
+ 	byte c;
+ 	byte    *out;
+-	//int		row;
+ 	byte    *end;
++
++	if ( !in || !decompressed || numareas <= 0 ) {
++		return;
++	}
+ 
+ 	// initialize the vis data, only set those that are visible
+ 	memset( decompressed, 0, numareas );
+ 
+-	//row = (numareas+7)>>3;
+ 	out = decompressed;
+-	end = ( byte * )( (int)decompressed + numareas );
+-
+-	do
+-	{
+-		/*
+-		if (*in)
+-		{
+-			*out++ = *in++;
+-			continue;
+-		}
+-		*/
+-
++	end = decompressed + numareas;
++
++	while ( out < end )
++	{
+ 		c = in[1];
+ 		if ( !c ) {
+-			AAS_Error( "DecompressVis: 0 repeat" );
+-		}
++			botimport.Print( PRT_WARNING, "AAS_DecompressVis: encountered 0 repeat, truncating VIS row\n" );
++			break;
++		}
++
++		if ( out + c > end ) {
++			botimport.Print( PRT_WARNING, "AAS_DecompressVis: repeat overflow (%d), clamping to remaining bytes\n", c );
++			c = (byte)( end - out );
++		}
++
+ 		if ( *in ) { // we need to set these bits
+ 			memset( out, 1, c );
+ 		}
++
+ 		in += 2;
+-		/*
+-		while (c)
+-		{
+-			*out++ = 0;
+-			c--;
+-		}
+-		*/
+ 		out += c;
+-	} while ( out < end );
++	}
+ } //end of the function AAS_DecompressVis
+ //===========================================================================
+ //

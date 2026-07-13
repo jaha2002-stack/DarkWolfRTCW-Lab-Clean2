@@ -1,0 +1,148 @@
+diff --git a/src/opengl/gl_d3d12raylight.cpp b/src/opengl/gl_d3d12raylight.cpp
+--- a/src/opengl/gl_d3d12raylight.cpp
++++ b/src/opengl/gl_d3d12raylight.cpp
+@@
+ static glRaytracingCleanVisualSafety_t g_glRaytracingCleanVisualSafety = { 1, 2, 2500 };
++struct glRaytracingCleanVisualPerformance_t
++{
++	int asyncSubmit;
++	int buildInterval;
++	int dispatchInterval;
++};
++
++static glRaytracingCleanVisualPerformance_t g_glRaytracingCleanVisualPerformance = { 1, 2, 1 };
++static int g_glRaytracingCleanVisualBuildFrame = 0;
++static int g_glRaytracingCleanVisualDispatchFrame = 0;
++static int g_glRaytracingCleanVisualHasOutput = 0;
++static ID3D12Resource* g_glRaytracingCleanVisualLastOutput = nullptr;
+ static volatile LONG g_glRaytracingDeviceLost = 0;
+@@
+ void glRaytracingSetCleanVisualSafetyOptions(int safeMode, int errorLimit, int fenceWaitMs)
+ {
+ 	g_glRaytracingCleanVisualSafety.safeMode = safeMode ? 1 : 0;
+ 	g_glRaytracingCleanVisualSafety.errorLimit = glRaytracingClamp<int>(errorLimit, 1, 64);
+ 	g_glRaytracingCleanVisualSafety.fenceWaitMs = glRaytracingClamp<int>(fenceWaitMs, 250, 30000);
+ }
++
++void glRaytracingSetCleanVisualPerformanceOptions(int asyncSubmit, int buildInterval, int dispatchInterval)
++{
++	g_glRaytracingCleanVisualPerformance.asyncSubmit = asyncSubmit ? 1 : 0;
++	g_glRaytracingCleanVisualPerformance.buildInterval = glRaytracingClamp<int>(buildInterval, 1, 8);
++	g_glRaytracingCleanVisualPerformance.dispatchInterval = glRaytracingClamp<int>(dispatchInterval, 1, 8);
++}
+@@
+ int glRaytracingBuildScene(void)
+ {
+ 	if (glRaytracingShouldAbortWork())
+ 		return 0;
+ 
+ 	if (!g_glRaytracingScene.initialized)
+ 		return 0;
++
++	// Clean visual performance: keep the exact full-resolution lighting path,
++	// but reuse the last valid TLAS on interval frames. Static world appearance
++	// is unchanged; only moving RT geometry updates at the selected cadence.
++	if (g_glRaytracingScene.activeInstanceCount > 0 &&
++		g_glRaytracingCleanVisualPerformance.buildInterval > 1)
++	{
++		++g_glRaytracingCleanVisualBuildFrame;
++		if ((g_glRaytracingCleanVisualBuildFrame % g_glRaytracingCleanVisualPerformance.buildInterval) != 0)
++			return 1;
++	}
+@@
+ bool glRaytracingLightingExecute(const glRaytracingLightingPassDesc_t* pass)
+ {
+ 	if (glRaytracingShouldAbortWork())
+ 		return false;
+ 
+ 	if (!g_glRaytracingLighting.initialized || !pass)
+ 		return false;
++
++	// Reuse the previous full-resolution DXR lighting texture on optional
++	// interval frames. No low-resolution upscale or block composite is used.
++	if (pass->outputTexture != g_glRaytracingCleanVisualLastOutput)
++	{
++		g_glRaytracingCleanVisualLastOutput = pass->outputTexture;
++		g_glRaytracingCleanVisualDispatchFrame = 0;
++		g_glRaytracingCleanVisualHasOutput = 0;
++	}
++	if (g_glRaytracingCleanVisualHasOutput &&
++		g_glRaytracingCleanVisualPerformance.dispatchInterval > 1)
++	{
++		++g_glRaytracingCleanVisualDispatchFrame;
++		if ((g_glRaytracingCleanVisualDispatchFrame % g_glRaytracingCleanVisualPerformance.dispatchInterval) != 0)
++			return true;
++	}
+@@
+ 	if (!glRaytracingEndCmd())
+ 		return false;
+ 
+-	glRaytracingWaitFenceValue(g_glRaytracingCmd.cmdLastFenceValue);
++	// The DXR and compatibility renderer command lists use the same D3D12
++	// queue. Queue submission order provides the GPU dependency; an immediate
++	// CPU fence wait only serializes every frame and destroys performance.
++	if (!g_glRaytracingCleanVisualPerformance.asyncSubmit)
++		glRaytracingWaitFenceValue(g_glRaytracingCmd.cmdLastFenceValue);
++
++	g_glRaytracingCleanVisualHasOutput = 1;
+ 
+ 	return true;
+ }
+diff --git a/src/opengl/opengl.h b/src/opengl/opengl.h
+--- a/src/opengl/opengl.h
++++ b/src/opengl/opengl.h
+@@
+ void                       glRaytracingSetCleanVisualSafetyOptions(int safeMode, int errorLimit, int fenceWaitMs);
++void                       glRaytracingSetCleanVisualPerformanceOptions(int asyncSubmit, int buildInterval, int dispatchInterval);
+ int                        glRaytracingHasDeviceLost(void);
+diff --git a/src/renderer/tr_backend.cpp b/src/renderer/tr_backend.cpp
+--- a/src/renderer/tr_backend.cpp
++++ b/src/renderer/tr_backend.cpp
+@@
+ void RB_UpdateDXRMesh(trDXRMesh_t* mesh, int currentFrame, int surfaceId, int stage)
+ {
++	// The same RTCW surface can be visited by several shader stages in one
++	// frame. Uploading and dirtying its BLAS repeatedly is pure duplicate work.
++	if (mesh->cachedFrame == currentFrame)
++	{
++		return;
++	}
++	mesh->cachedFrame = currentFrame;
++
+ 	if (surfaceId < 0 || surfaceId >= MAX_DXR_SURFACES)
+@@
+-	glFinish();
++	glRaytracingSetCleanVisualPerformanceOptions(
++		r_dxrAsyncSubmit ? r_dxrAsyncSubmit->integer : 1,
++		r_dxrBuildInterval ? r_dxrBuildInterval->integer : 2,
++		r_dxrDispatchInterval ? r_dxrDispatchInterval->integer : 1);
++
++	// QD3D12_FlushQueuedBatches() in glLightScene submits prior raster work on
++	// the same queue. A global glFinish here forces a full GPU idle every frame.
++	if (r_dxrCpuSync && r_dxrCpuSync->integer)
++		glFinish();
+ 	glLightScene();
+diff --git a/src/renderer/tr_init.cpp b/src/renderer/tr_init.cpp
+--- a/src/renderer/tr_init.cpp
++++ b/src/renderer/tr_init.cpp
+@@
+ cvar_t  *r_dxrFenceWaitMs;
++cvar_t  *r_dxrAsyncSubmit;
++cvar_t  *r_dxrBuildInterval;
++cvar_t  *r_dxrDispatchInterval;
++cvar_t  *r_dxrCpuSync;
+@@
+ 	r_dxrFenceWaitMs = ri.Cvar_Get( "r_dxrFenceWaitMs", "2500", CVAR_ARCHIVE );
++	r_dxrAsyncSubmit = ri.Cvar_Get( "r_dxrAsyncSubmit", "1", CVAR_ARCHIVE );
++	r_dxrBuildInterval = ri.Cvar_Get( "r_dxrBuildInterval", "2", CVAR_ARCHIVE );
++	r_dxrDispatchInterval = ri.Cvar_Get( "r_dxrDispatchInterval", "1", CVAR_ARCHIVE );
++	r_dxrCpuSync = ri.Cvar_Get( "r_dxrCpuSync", "0", CVAR_ARCHIVE );
+diff --git a/src/renderer/tr_local.h b/src/renderer/tr_local.h
+--- a/src/renderer/tr_local.h
++++ b/src/renderer/tr_local.h
+@@
+ extern cvar_t   *r_dxrFenceWaitMs;      // safe fence wait timeout before dropping DXR work
++extern cvar_t   *r_dxrAsyncSubmit;      // do not block the CPU after each full-resolution DXR dispatch
++extern cvar_t   *r_dxrBuildInterval;    // reuse the valid TLAS between dynamic-scene updates
++extern cvar_t   *r_dxrDispatchInterval; // reuse the full-resolution lighting output between dispatches
++extern cvar_t   *r_dxrCpuSync;          // legacy full glFinish before DXR, for diagnosis only

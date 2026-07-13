@@ -1,0 +1,14 @@
+diff --git a/src/opengl/gl_d3d12raylight.cpp b/src/opengl/gl_d3d12raylight.cpp
+index 00d04fb..a10d0da 100644
+--- a/src/opengl/gl_d3d12raylight.cpp
++++ b/src/opengl/gl_d3d12raylight.cpp
+@@ -1,5 +1,9 @@
+ #include "opengl.h"
+ 
++#if defined(_MSC_VER)
++extern void __cdecl Com_Printf(const char* fmt, ...);
++#endif
++
+ #include <windows.h>
+ #include <d3d12.h>
+ #include <dxgi1_6.h>
