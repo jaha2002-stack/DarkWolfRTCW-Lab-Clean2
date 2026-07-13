@@ -1,4 +1,4 @@
-name: DarkWolf DXR CleanVisual RT Effects Lab (v6-compatible diagnostics)
+name: DarkWolf RTCW RT Effects Playable v6
 
 on:
   workflow_dispatch:
@@ -22,42 +22,47 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Apply stable Performance v2 plus RT Effects Lab
+      - name: Install deterministic Playable v6 source snapshots
         shell: pwsh
-        run: ./scripts/apply-dxr-cleanvisual-rt-effects-lab.ps1
+        run: ./scripts/apply-darkwolf-rt-effects-playable-v6.ps1
 
-      - name: Verify RT Effects Lab source edits
+      - name: Verify Playable v6 source and profiles
         shell: pwsh
         run: ./scripts/verify-darkwolf-rt-effects-playable-v6.ps1
 
-      - name: Compile-check embedded DXR HLSL
+      - name: Compile-check embedded Playable v6 HLSL
         shell: pwsh
         run: ./scripts/validate-darkwolf-rt-effects-playable-v6-hlsl.ps1
 
-      - name: Build RT Effects Lab runtime package
+      - name: Build Playable v6 Windows runtime
         shell: pwsh
         run: ./scripts/build-windows-clean-release.ps1 -Configuration '${{ inputs.configuration }}'
 
-      - name: Copy RT Effects Lab profiles
+      - name: Package Playable v6 runtime and profiles
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist/main -Force | Out-Null
-          Get-ChildItem test-bats -Filter 'RUN_RT_*.bat' -File | ForEach-Object { Copy-Item $_.FullName dist/ -Force }
-          Copy-Item test-bats/RUN_RESET_SAFE_NO_DXR.bat dist/ -Force
-          Get-ChildItem main -Filter 'dxr_lab_*.cfg' -File | ForEach-Object { Copy-Item $_.FullName dist/main/ -Force }
+          $bats = @(
+            'RUN_RT_ALL_BALANCED.bat',
+            'RUN_RT_ALL_QUALITY.bat',
+            'RUN_RT_ALL_PERFORMANCE.bat',
+            'RUN_RT_ALL_BALANCED_ESCAPE1_TEST.bat',
+            'RUN_RT_DISABLE_V6.bat',
+            'VERIFY_RT_PLAYABLE_V6_INSTALL.bat'
+          )
+          foreach ($bat in $bats) { Copy-Item (Join-Path 'test-bats' $bat) dist/ -Force }
           Get-ChildItem main -Filter 'dxr_v6_*.cfg' -File | ForEach-Object { Copy-Item $_.FullName dist/main/ -Force }
-          Copy-Item main/dxr_reset_safe.cfg dist/main/ -Force
-          Copy-Item README_DXR_CLEANVISUAL_RT_EFFECTS_LAB_RU.md dist/ -Force
           Copy-Item README_DARKWOLF_RT_EFFECTS_PLAYABLE_V6_RU.md dist/ -Force
           Copy-Item docs/DARKWOLF_RT_EFFECTS_PLAYABLE_V6_CVARS_RU.md dist/ -Force
+          Copy-Item CHANGELOG_DARKWOLF_RT_EFFECTS_PLAYABLE_V6_RU.md dist/ -Force
 
       - name: Show packaged files
         shell: pwsh
         run: Get-ChildItem -Path dist -Recurse | Format-Table FullName, Length
 
-      - name: Upload RT Effects Lab artifact
+      - name: Upload Playable v6 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DarkWolf-DXR-CleanVisual-RT-Effects-Lab-Release
+          name: DarkWolfRTCW-RT-Effects-Playable-v6-${{ inputs.configuration }}
           path: dist/**
           if-no-files-found: error
