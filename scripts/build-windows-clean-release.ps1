@@ -134,10 +134,37 @@ try {
         }
     }
 
-    foreach ($pattern in @('OpenAL32.dll','dxcompiler.dll','dxil.dll','D3D12Core.dll','d3d12SDKLayers.dll')) {
+    # Runtime DLLs required by WolfSP.exe and the D3D12/DXR/Streamline path.
+    # Do not copy only OpenAL/dxcompiler/dxil: WolfSP.exe imports sl.interposer.dll
+    # directly, and Streamline can load sl.* / nvngx_* modules dynamically. Missing
+    # sl.interposer.dll causes the game to fail at process startup before logs are written.
+    $runtimeDllPatterns = @(
+        'OpenAL32.dll',
+        'dxcompiler.dll',
+        'dxil.dll',
+        'D3D12Core.dll',
+        'd3d12SDKLayers.dll',
+        'D3DCompiler_47.dll',
+        'NvLowLatencyVk.dll',
+        'sl*.dll',
+        'nvngx*.dll'
+    )
+
+    $copiedRuntimeDlls = @{}
+    foreach ($pattern in $runtimeDllPatterns) {
         Get-ChildItem -Path $RepoRoot -Filter $pattern -File -ErrorAction SilentlyContinue | ForEach-Object {
-            Copy-Item -LiteralPath $_.FullName -Destination $dist -Force
-            Write-Host "Copied $($_.Name)"
+            $key = $_.Name.ToLowerInvariant()
+            if (-not $copiedRuntimeDlls.ContainsKey($key)) {
+                Copy-Item -LiteralPath $_.FullName -Destination $dist -Force
+                $copiedRuntimeDlls[$key] = $true
+                Write-Host "Copied runtime DLL $($_.Name)"
+            }
+        }
+    }
+
+    foreach ($requiredRuntimeDll in @('OpenAL32.dll','dxcompiler.dll','dxil.dll','sl.interposer.dll')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $dist $requiredRuntimeDll))) {
+            throw "Required runtime DLL was not packaged: $requiredRuntimeDll. Make sure it exists in the repository root before running the workflow."
         }
     }
 
