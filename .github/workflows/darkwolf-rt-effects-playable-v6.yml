@@ -1,4 +1,4 @@
-name: DarkWolf RTCW RT Effects Playable v6
+name: DarkWolf RTCW RT Effects Playable v6.2
 
 on:
   workflow_dispatch:
@@ -22,23 +22,23 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Install deterministic Playable v6 source snapshots
+      - name: Install deterministic Playable v6.2 source snapshots
         shell: pwsh
         run: ./scripts/apply-darkwolf-rt-effects-playable-v6.ps1
 
-      - name: Verify Playable v6 source and profiles
+      - name: Verify Playable v6.2 source and profiles
         shell: pwsh
         run: ./scripts/verify-darkwolf-rt-effects-playable-v6.ps1
 
-      - name: Compile-check embedded Playable v6 HLSL
+      - name: Compile-check embedded Playable v6.2 HLSL
         shell: pwsh
         run: ./scripts/validate-darkwolf-rt-effects-playable-v6-hlsl.ps1
 
-      - name: Build Playable v6 Windows runtime
+      - name: Build Playable v6.2 Windows runtime
         shell: pwsh
         run: ./scripts/build-windows-clean-release.ps1 -Configuration '${{ inputs.configuration }}'
 
-      - name: Package Playable v6 runtime and profiles
+      - name: Package Playable v6.2 runtime and profiles
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist/main -Force | Out-Null
@@ -56,14 +56,16 @@ jobs:
           Copy-Item README_DARKWOLF_RT_EFFECTS_PLAYABLE_V6_RU.md dist/ -Force
           Copy-Item docs/DARKWOLF_RT_EFFECTS_PLAYABLE_V6_CVARS_RU.md dist/ -Force
           Copy-Item CHANGELOG_DARKWOLF_RT_EFFECTS_PLAYABLE_V6_RU.md dist/ -Force
+          Copy-Item README_DARKWOLF_RT_EFFECTS_PLAYABLE_V6_2_GAMEPLAY_FIX_RU.md dist/ -Force
+          Copy-Item VALIDATION_DARKWOLF_RT_EFFECTS_PLAYABLE_V6_2.txt dist/ -Force
 
       - name: Show packaged files
         shell: pwsh
         run: Get-ChildItem -Path dist -Recurse | Format-Table FullName, Length
 
-      - name: Upload Playable v6 artifact
+      - name: Upload Playable v6.2 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DarkWolfRTCW-RT-Effects-Playable-v6-${{ inputs.configuration }}
+          name: DarkWolfRTCW-RT-Effects-Playable-v6.2-${{ inputs.configuration }}
           path: dist/**
           if-no-files-found: error
