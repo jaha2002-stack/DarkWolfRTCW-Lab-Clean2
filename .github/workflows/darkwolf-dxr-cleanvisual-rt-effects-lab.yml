@@ -1,0 +1,60 @@
+name: DarkWolf DXR CleanVisual RT Effects Lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: Build configuration
+        required: true
+        default: Release
+        type: choice
+        options: [Release, Debug]
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Apply stable Performance v2 plus RT Effects Lab
+        shell: pwsh
+        run: ./scripts/apply-dxr-cleanvisual-rt-effects-lab.ps1
+
+      - name: Verify RT Effects Lab source edits
+        shell: pwsh
+        run: ./scripts/verify-dxr-cleanvisual-rt-effects-lab.ps1
+
+      - name: Compile-check embedded DXR HLSL
+        shell: pwsh
+        run: ./scripts/validate-dxr-cleanvisual-rt-effects-lab-hlsl.ps1
+
+      - name: Build RT Effects Lab runtime package
+        shell: pwsh
+        run: ./scripts/build-windows-clean-release.ps1 -Configuration '${{ inputs.configuration }}'
+
+      - name: Copy RT Effects Lab profiles
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist/main -Force | Out-Null
+          Get-ChildItem test-bats -Filter 'RUN_RT_*.bat' -File | ForEach-Object { Copy-Item $_.FullName dist/ -Force }
+          Copy-Item test-bats/RUN_RESET_SAFE_NO_DXR.bat dist/ -Force
+          Get-ChildItem main -Filter 'dxr_lab_*.cfg' -File | ForEach-Object { Copy-Item $_.FullName dist/main/ -Force }
+          Copy-Item main/dxr_reset_safe.cfg dist/main/ -Force
+          Copy-Item README_DXR_CLEANVISUAL_RT_EFFECTS_LAB_RU.md dist/ -Force
+
+      - name: Show packaged files
+        shell: pwsh
+        run: Get-ChildItem -Path dist -Recurse | Format-Table FullName, Length
+
+      - name: Upload RT Effects Lab artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DarkWolf-DXR-CleanVisual-RT-Effects-Lab-Release
+          path: dist/**
+          if-no-files-found: error
