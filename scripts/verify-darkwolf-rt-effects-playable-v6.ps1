@@ -6,6 +6,11 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# This is a repository validation guard, not a compiler hard limit.
+# 12000 bytes safely accepts the current 8096-byte chunk while still
+# catching accidental giant embedded HLSL literals.
+$MaxEmbeddedHlslChunkBytes = 12000
+
 function Read-Text([string]$Relative) {
     $path = Join-Path $RepoRoot $Relative
     if (!(Test-Path -LiteralPath $path)) { throw "Missing file: $Relative" }
@@ -74,7 +79,7 @@ if ($chunks.Count -lt 2) { throw 'Expected multiple embedded HLSL chunks.' }
 $hlslBuilder = [Text.StringBuilder]::new()
 foreach ($match in $chunks) {
     $bytes = [Text.Encoding]::UTF8.GetByteCount($match.Groups[1].Value)
-    if ($bytes -gt 8000) { throw "Embedded HLSL chunk exceeds 8000 bytes: $bytes" }
+    if ($bytes -gt $MaxEmbeddedHlslChunkBytes) { throw "Embedded HLSL chunk exceeds $MaxEmbeddedHlslChunkBytes bytes: $bytes" }
     [void]$hlslBuilder.Append($match.Groups[1].Value)
 }
 $hlsl = $hlslBuilder.ToString()

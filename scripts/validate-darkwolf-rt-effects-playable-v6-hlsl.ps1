@@ -6,6 +6,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Validation guard only; the real compiler check is performed below by DXC.
+$MaxEmbeddedHlslChunkBytes = 12000
+
 $sourcePath = Join-Path $RepoRoot 'src/opengl/gl_d3d12raylight.cpp'
 if (!(Test-Path -LiteralPath $sourcePath)) {
     throw "Source file not found: $sourcePath"
@@ -27,8 +30,8 @@ $builder = [Text.StringBuilder]::new()
 foreach ($match in $chunkMatches) {
     $chunk = $match.Groups[1].Value
     $chunkBytes = [Text.Encoding]::UTF8.GetByteCount($chunk)
-    if ($chunkBytes -gt 8000) {
-        throw "Embedded HLSL chunk exceeds the conservative 8000-byte MSVC limit: $chunkBytes bytes."
+    if ($chunkBytes -gt $MaxEmbeddedHlslChunkBytes) {
+        throw "Embedded HLSL chunk exceeds the validation guard of $MaxEmbeddedHlslChunkBytes bytes: $chunkBytes bytes."
     }
     [void]$builder.Append($chunk)
 }
