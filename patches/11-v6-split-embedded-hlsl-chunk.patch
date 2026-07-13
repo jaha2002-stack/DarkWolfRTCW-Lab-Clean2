@@ -1,0 +1,24 @@
+--- a/source-overrides/src/opengl/gl_d3d12raylight.cpp
++++ b/source-overrides/src/opengl/gl_d3d12raylight.cpp
+@@ -2590,7 +2590,8 @@
+         }
+     }
+ 
+-    float3 shadowedLighting = lightingAccum;
++)DXRHLSL",
++R"DXRHLSL(    float3 shadowedLighting = lightingAccum;
+     float3 unshadowedLighting = max(lightingUnshadowedAccum, 0.0);
+     lightingAccum *= ao;
+     specularAccum *= lerp(1.0, ao, 0.45);
+--- a/src/opengl/gl_d3d12raylight.cpp
++++ b/src/opengl/gl_d3d12raylight.cpp
+@@ -2590,7 +2590,8 @@
+         }
+     }
+ 
+-    float3 shadowedLighting = lightingAccum;
++)DXRHLSL",
++R"DXRHLSL(    float3 shadowedLighting = lightingAccum;
+     float3 unshadowedLighting = max(lightingUnshadowedAccum, 0.0);
+     lightingAccum *= ao;
+     specularAccum *= lerp(1.0, ao, 0.45);

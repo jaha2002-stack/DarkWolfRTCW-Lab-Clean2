@@ -1,0 +1,4 @@
+1346a34bbe5133dfc910de34b9f9a8e16d25d7d99e2db8bfc31a161fdc73fd7d  README_APPLY_HLSL_CHUNK_FIX_RU.txt
+6cdfb0eb8ae8c1318c8a85155e1f5f8482040937bd27d48912b8bffe2619748c  patches/11-v6-split-embedded-hlsl-chunk.patch
+f46d4b98c13788a22c0c93b12dee42aa359f61fa84a53d15d5bf8cfe72508b76  repo-overlay/source-overrides/src/opengl/gl_d3d12raylight.cpp
+f46d4b98c13788a22c0c93b12dee42aa359f61fa84a53d15d5bf8cfe72508b76  repo-overlay/src/opengl/gl_d3d12raylight.cpp
