@@ -95,7 +95,20 @@ try {
     Invoke-MSBuildProject 'src\renderer\renderer.vcxproj'
     Invoke-MSBuildProject 'src\cgame\cgame.vcxproj'
     Invoke-MSBuildProject 'src\ui\ui.vcxproj'
-    Invoke-MSBuildProject 'src\game\game.vcxproj'
+
+    # RTCW game.vcxproj has a custom step that rebuilds the game function table.
+    # On a clean CI checkout the first pass can legitimately update the table and
+    # then fail at link time with a missing object such as .\Release\g_save.obj.
+    # Re-running the same project after that generated table update completes the
+    # compile/link pass. Do not hide a real error: the second pass is still fatal.
+    try {
+        Invoke-MSBuildProject 'src\game\game.vcxproj'
+    }
+    catch {
+        Write-Warning 'game.vcxproj failed on the first pass. Retrying once because the function table generator can require a clean second MSBuild pass.'
+        Invoke-MSBuildProject 'src\game\game.vcxproj'
+    }
+
     Invoke-MSBuildProject 'src\wolf.vcxproj' $false
 
     $dist = Join-Path $RepoRoot 'dist'
