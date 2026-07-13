@@ -1,4 +1,4 @@
-# Cvars DarkWolfRTCW RT Effects Playable v6
+# Cvars DarkWolfRTCW RT Effects Playable v6.2
 
 Все перечисленные ниже игровые cvars применяются во время работы. `vid_restart` не нужен. Исключение: старые latched-параметры разрешения/upscaler задаются BAT-файлом до инициализации renderer.
 
@@ -36,7 +36,7 @@
 
 | Cvar | Balanced | Диапазон/смысл |
 |---|---:|---|
-| `r_dxrMaxLights` | `20` | Максимум источников после importance selection |
+| `r_dxrMaxLights` | `24` | Максимум источников после importance selection |
 | `r_dxrLightSelectionMode` | `1` | `0` — source order, `1` — importance sort |
 | `r_dxrLightSelectionHysteresis` | `0.20` | Удерживает ранее выбранные lights, снижает popping |
 | `r_dxrLightSelectionMinScore` | `0.0005` | Отбрасывает практически невидимые lights |
@@ -44,8 +44,8 @@
 | `r_dxrRectLightIntensityCap` | `1.90` | Защита для emissive BSP rect lights |
 | `r_dxrLightRadiusMin` | `48` | Нижний предел influence radius |
 | `r_dxrLightRadiusMax` | `2048` | Верхний предел influence radius |
-| `r_dxrDynamicLightIntensityScale` | `0.65` | Общий scale выбранных lights |
-| `r_dxrDynamicLightRadiusScale` | `0.88` | Общий radius scale |
+| `r_dxrDynamicLightIntensityScale` | `0.74` | Общий scale выбранных lights |
+| `r_dxrDynamicLightRadiusScale` | `0.90` | Общий radius scale |
 
 При `r_dxrDebug 1` лог раз в секунду выводит `lights`, `selected`, `rejected`.
 
@@ -54,30 +54,38 @@
 | Cvar | Balanced | Назначение |
 |---|---:|---|
 | `r_dxrLightmapStrength` | `1.00` | Оригинальная RTCW lighting base |
-| `r_dxrLegacyBlend` | `1.00` | Доля оригинального lightmap |
-| `r_dxrDirectLightingStrength` | `0.18` | RT direct diffuse |
-| `r_dxrAOLightmapStrength` | `0.18` | Насколько AO модулирует lightmap |
-| `r_dxrShadowLightmapStrength` | `0.14` | Насколько RT shadow модулирует lightmap |
-| `r_dxrExposure` | `0.97` | Общая pre-tonemap экспозиция |
-| `r_dxrRadianceClamp` | `3.00` | Начало мягкого HDR guard |
-| `r_dxrHighlightCompression` | `1.60` | Сжатие превышения над clamp |
+| `r_dxrLegacyBlend` | `0.94` | Доля оригинального lightmap |
+| `r_dxrDirectLightingStrength` | `0.34` | RT direct diffuse |
+| `r_dxrAOLightmapStrength` | `0.30` | Насколько AO модулирует lightmap |
+| `r_dxrShadowLightmapStrength` | `0.34` | Насколько RT shadow модулирует lightmap |
+| `r_dxrExposure` | `0.96` | Общая pre-tonemap экспозиция |
+| `r_dxrRadianceClamp` | `2.85` | Начало мягкого HDR guard |
+| `r_dxrHighlightCompression` | `1.75` | Сжатие превышения над clamp |
 | `r_dxrTonemap` | `2` | `0` off, `1` Reinhard, `2` ACES approximation |
 | `r_dxrHDRWhitePoint` | `2.60` | White point для mode 1 |
-| `r_dxrBloomStrength` | `0.018` | Очень слабый bloom |
-| `r_dxrBloomThreshold` | `1.45` | Порог bloom |
+| `r_dxrBloomStrength` | `0.016` | Очень слабый bloom |
+| `r_dxrBloomThreshold` | `1.55` | Порог bloom |
+
+## Видимый игровой composite v6.2
+
+В обычном режиме (`r_dxrDebugEffect 0`) direct light, specular, reflections и GI
+переводятся в ограниченный perceptual range перед добавлением к оригинальному
+RTCW lightmap. Это не влияет на debug-режимы и сохраняет нулевой компонент
+строго нулевым. Для A/B-проверки переключайте конкретный эффект и выполняйте
+`r_dxrHistoryReset 1`.
 
 ## Тени
 
 | Cvar | Balanced | Назначение |
 |---|---:|---|
-| `r_dxrShadowStrength` | `0.74` | Общая сила shadow mask |
+| `r_dxrShadowStrength` | `0.78` | Общая сила shadow mask |
 | `r_dxrShadowSamples` | `1` | Главный ray budget; Quality использует 2 |
-| `r_dxrShadowSoftness` | `0.42` | Размер area sampling |
-| `r_dxrShadowBias` | `0.075` | Защита от self-shadow grid/acne |
+| `r_dxrShadowSoftness` | `0.44` | Размер area sampling |
+| `r_dxrShadowBias` | `0.080` | Защита от self-shadow grid/acne |
 | `r_dxrShadowMaxDistance` | `3072` | Дальность shadow rays |
-| `r_dxrShadowMinVisibility` | `0.16` | Не допускает полностью черных провалов |
+| `r_dxrShadowMinVisibility` | `0.18` | Не допускает полностью черных провалов |
 | `r_dxrContactShadows` | `1` | Короткие contact rays |
-| `r_dxrContactShadowLength` | `80` | Длина contact rays |
+| `r_dxrContactShadowLength` | `72` | Длина contact rays |
 
 ## Spatial и temporal
 
@@ -87,11 +95,11 @@
 | `r_dxrDenoiserStrength` | `0.82` | Сила spatial filter |
 | `r_dxrDenoiserDepthSigma` | `180` | Защита границ по depth |
 | `r_dxrDenoiserNormalSigma` | `30` | Защита границ по normal |
-| `r_dxrTemporalWeight` | `0.52` | Вес прошлой resolved history |
-| `r_dxrTemporalClamp` | `0.075` | Neighborhood clamp против ghosting |
+| `r_dxrTemporalWeight` | `0.46` | Вес прошлой resolved history |
+| `r_dxrTemporalClamp` | `0.060` | Neighborhood clamp против ghosting |
 | `r_dxrTemporalPositionThreshold` | `0.10` | Reset при перемещении камеры |
 | `r_dxrTemporalRotationThreshold` | `0.0015` | Reset при повороте камеры |
-| `r_dxrTemporalMaxFrames` | `8` | Периодический reset против stale history |
+| `r_dxrTemporalMaxFrames` | `6` | Периодический reset против stale history |
 | `r_dxrHistoryReset` | `1` | Ручной one-shot reset |
 
 ## Debug views
@@ -108,7 +116,10 @@
 | `5` | GI component |
 | `6` | RT direct diffuse |
 | `7` | Specular |
-| `8` | Original lightmap base |
+| `8` | Прямой `gAlbedoTex` без post-processing |
 | `9` | Shadowed/unshadowed direct ratio |
+| `10` | Постоянный красный output test |
+| `11` | Постоянный зелёный output test |
+| `12` | Постоянный синий output test |
 
 Для возврата: `r_dxrDebugEffect 0; r_dxrDebug 0`.

@@ -1,3 +1,10 @@
+# v6.2 — Verified Gameplay Composite Fix
+
+- v6.1 tests confirmed normal-brightness sun, direct-light and albedo outputs.
+- Added bounded perceptual gameplay mixing for direct, specular, reflections and GI.
+- Rebalanced the main campaign profile so enabled effects are visible without a diagnostic camera light.
+- Retained synchronous submission and all v6.1 direct debug paths.
+
 # Changelog — DarkWolfRTCW RT Effects Playable v6
 
 ## v6.0 source patch

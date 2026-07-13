@@ -1,0 +1,36 @@
+DarkWolfRTCW RT Effects Playable v6.2 - Static Validation Report
+Generated: 2026-07-13
+
+Base:
+- Playable v6.1 Debug and Component Pipeline Fix
+- User runtime tests confirmed normal-brightness debug modes 12, 8, 3 and 6.
+
+Source validation:
+- src and source-overrides snapshots checked for all 8 deterministic source files.
+- glRaytracingEffectsOptions_t size assert: 320 bytes.
+- glRaytracingLightingConstants_t size assert: 544 bytes.
+- Per-member compile-time offset assertions: 74 effect fields and 18 outer fields.
+- Embedded HLSL chunks: 8.
+- Maximum embedded HLSL chunk with CRLF accounting: 7823 bytes (limit 8000).
+- HLSL delimiter balance: parentheses, braces and brackets all balanced.
+- Required v6.2 gameplay composite, radiance guard, resolve and debug markers present.
+
+Profile validation:
+- Balanced enables shadows, sun, dynamic lights, AO, reflections, sky, GI,
+  specular, spatial denoiser, temporal stabilization and bloom.
+- Balanced disables fallback light and all debug modes.
+- Stable path retained: r_dxrAsyncSubmit 0, r_dxrCpuSync 1.
+- No renderer restart command appears in runtime CFG/BAT profiles.
+- Main BAT starts DXR and stable submission cvars before executing the profile.
+
+Workflow validation:
+- GitHub Actions YAML parsed successfully.
+- Workflow name and artifact name updated to Playable v6.2.
+- Documentation and runtime profile files referenced by packaging exist.
+
+Automated static checks completed: 92 passed, 0 failed.
+
+Environment limitation:
+- Windows MSVC/DXC compilation and an actual D3D12/DXR GPU run cannot be
+  performed in this Linux environment. The included GitHub Actions workflow
+  performs the real embedded-HLSL compile check and Windows build.

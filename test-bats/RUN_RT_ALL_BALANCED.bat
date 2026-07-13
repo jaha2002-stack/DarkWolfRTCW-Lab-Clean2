@@ -11,5 +11,5 @@ if not exist "main\dxr_v6_all_balanced.cfg" (
   pause
   exit /b 1
 )
-start "DarkWolf RTCW RT Playable v6" "WolfSP.exe" +set r_dxrNativeResolution 1 +set r_dxrUpscalerBackend 0 +exec dxr_v6_all_balanced.cfg
+start "DarkWolf RTCW RT Playable v6.2" "WolfSP.exe" +set r_dxr 1 +set r_dxrAsyncSubmit 0 +set r_dxrCpuSync 1 +set r_dxrNativeResolution 1 +set r_dxrUpscalerBackend 0 +exec dxr_v6_all_balanced.cfg
 endlocal

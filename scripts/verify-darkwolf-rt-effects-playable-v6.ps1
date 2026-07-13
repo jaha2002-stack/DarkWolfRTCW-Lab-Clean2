@@ -6,11 +6,6 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# This is a repository validation guard, not a compiler hard limit.
-# 12000 bytes safely accepts the current 8096-byte chunk while still
-# catching accidental giant embedded HLSL literals.
-$MaxEmbeddedHlslChunkBytes = 12000
-
 function Read-Text([string]$Relative) {
     $path = Join-Path $RepoRoot $Relative
     if (!(Test-Path -LiteralPath $path)) { throw "Missing file: $Relative" }
@@ -48,6 +43,9 @@ foreach ($relative in $sourceFiles) { Assert-Same $relative }
 Assert-Contains 'src/opengl/gl_d3d12raylight.cpp' 'static_assert(sizeof(glRaytracingEffectsOptions_t) == 320'
 Assert-Contains 'src/opengl/gl_d3d12raylight.cpp' 'static_assert(sizeof(glRaytracingLightingConstants_t) == 544'
 Assert-Contains 'src/opengl/gl_d3d12raylight.cpp' 'glRaytracingLightingSelectLights'
+Assert-Contains 'src/opengl/gl_d3d12raylight.cpp' 'CompositeGameplayComponent'
+Assert-Contains 'src/opengl/gl_d3d12raylight.cpp' 'Playable v6.2 verified gameplay composite'
+Assert-Contains 'src/opengl/gl_d3d12raylight.cpp' 'DXR v6.2 CPU CB:'
 Assert-Contains 'src/opengl/gl_d3d12raylight.cpp' 'ApplyRadianceGuard'
 Assert-Contains 'src/opengl/gl_d3d12raylight.cpp' 'previously resolved, post-tonemapped frame'
 Assert-Contains 'src/opengl/gl_d3d12raylight.cpp' 'glRaytracingLightingGetSelectedLightCount'
@@ -79,11 +77,11 @@ if ($chunks.Count -lt 2) { throw 'Expected multiple embedded HLSL chunks.' }
 $hlslBuilder = [Text.StringBuilder]::new()
 foreach ($match in $chunks) {
     $bytes = [Text.Encoding]::UTF8.GetByteCount($match.Groups[1].Value)
-    if ($bytes -gt $MaxEmbeddedHlslChunkBytes) { throw "Embedded HLSL chunk exceeds $MaxEmbeddedHlslChunkBytes bytes: $bytes" }
+    if ($bytes -gt 8000) { throw "Embedded HLSL chunk exceeds 8000 bytes: $bytes" }
     [void]$hlslBuilder.Append($match.Groups[1].Value)
 }
 $hlsl = $hlslBuilder.ToString()
-foreach ($marker in @('gDirectLightingStrength', 'gRadianceClamp', 'gLightSelectionMode', 'ApplyRadianceGuard', 'ResolveLabPixel')) {
+foreach ($marker in @('gDirectLightingStrength', 'gRadianceClamp', 'gLightSelectionMode', 'CompositeGameplayComponent', 'ApplyRadianceGuard', 'ResolveLabPixel')) {
     if (!$hlsl.Contains($marker)) { throw "HLSL marker missing: $marker" }
 }
 foreach ($pair in @(@('{','}'), @('(',')'), @('[',']'))) {
@@ -123,11 +121,16 @@ foreach ($setting in @(
     'set r_dxrGI 1',
     'set r_dxrSpecular 1',
     'set r_dxrDenoiser 1',
-    'set r_dxrTemporal 1')) {
+    'set r_dxrTemporal 1',
+    'set r_dxrDirectLightingStrength 0.34',
+    'set r_dxrReflectionStrength 0.10',
+    'set r_dxrGIStrength 0.080',
+    'set r_dxrDebug 0',
+    'set r_dxrDebugEffect 0')) {
     if (!$balanced.Contains($setting)) { throw "Balanced profile is missing: $setting" }
 }
 
-Write-Host "Playable v6 static verification passed. Effects constants: 80 scalars / 320 bytes; total cbuffer: 544 bytes."
+Write-Host "Playable v6.2 static verification passed. Effects constants: 80 scalars / 320 bytes; total cbuffer: 544 bytes."
 Write-Host "Embedded HLSL chunks: $($chunks.Count); total UTF-8 bytes: $([Text.Encoding]::UTF8.GetByteCount($hlsl))."
 $global:LASTEXITCODE = 0
 exit 0

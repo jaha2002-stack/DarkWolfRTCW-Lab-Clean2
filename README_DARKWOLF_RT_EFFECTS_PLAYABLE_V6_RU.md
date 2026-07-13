@@ -1,3 +1,5 @@
+> **Обновление v6.2:** применён подтверждённый игровым тестом component pipeline и новый видимый bounded gameplay composite. См. `README_DARKWOLF_RT_EFFECTS_PLAYABLE_V6_2_GAMEPLAY_FIX_RU.md`.
+
 # DarkWolfRTCW RT Effects Playable v6
 
 Это исходный патч и игровой профиль для прохождения кампании RTCW с одновременно включенными RT-эффектами. Он основан на стабильном результате тестов 1-5: синхронный DXR-путь работал без зависаний и `DXGI_ERROR_DEVICE_REMOVED`, а трассируемые тени от факелов, кронштейнов и решеток были видимы.

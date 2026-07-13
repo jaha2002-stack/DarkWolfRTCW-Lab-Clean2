@@ -9,12 +9,12 @@ call :check "main\dxr_v6_all_performance.cfg"
 call :check "main\dxr_v6_disable_all.cfg"
 if "%FAILED%"=="1" (
   echo.
-  echo [ERROR] Playable v6 installation is incomplete.
+  echo [ERROR] Playable v6.2 installation is incomplete.
   pause
   exit /b 1
 )
 echo.
-echo [OK] DarkWolfRTCW RT Effects Playable v6 runtime is installed.
+echo [OK] DarkWolfRTCW RT Effects Playable v6.2 runtime is installed.
 pause
 exit /b 0
 

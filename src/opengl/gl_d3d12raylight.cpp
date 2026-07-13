@@ -2433,6 +2433,21 @@ float3 DebugNormalizePositive(float3 color, float gain)
     return 1.0 - exp2(-color * max(gain, 0.001));
 }
 
+// Playable v6.2: perceptual component mapping for the normal gameplay
+// composite. The RTCW framebuffer is already authored and lightmapped, while
+// the RT components are low-energy radiometric additions. A direct linear add
+// made the verified components nearly invisible at gameplay strengths. This
+// bounded mapping keeps zero exactly zero, preserves component colour, gives
+// the cvar strengths a useful visible range and prevents any single component
+// from turning a room white. DebugEffect modes continue to bypass this path.
+float3 CompositeGameplayComponent(float3 color, float gain, float ceiling)
+{
+    color = max(color, 0.0);
+    float3 mapped = 1.0 - exp2(-color * max(gain, 0.001));
+    float boundedCeiling = max(ceiling, 0.0);
+    return min(mapped, boundedCeiling.xxx);
+}
+
 float3 ApplyRadianceGuard(float3 color)
 {
     color = max(color, 0.0);
@@ -2803,19 +2818,30 @@ R"DXRHLSL(    float3 shadowedLighting = lightingAccum;
     }
     else
     {
-        // Keep RTCW's authored lightmaps as a stable base.  RT direct light,
-        // specular, AO, sky/reflections and GI are mixed as independent
-        // components instead of treating the already-lit framebuffer as raw
-        // material albedo.  This avoids the v5 exposure pumping.
-        float directPresence = saturate(unshadowedLuma * 0.35);
-        float legacyShadow = lerp(1.0, max(shadowRatio, gShadowMinVisibility),
-            saturate(gShadowLightmapStrength) * directPresence);
+        // Playable v6.2 verified gameplay composite. The direct, reflection,
+        // GI and specular channels were proven valid by v6.1 modes 3/4/5/6/7/8.
+        // Mix them into the authored RTCW scene with bounded perceptual lifts:
+        // visible in normal play, independently switchable, and protected from
+        // the white-room failure seen in the earlier diagnostic light tests.
+        float directPresence = saturate(unshadowedLuma * 0.55);
+        float shadowWeight = saturate(gShadowLightmapStrength) * lerp(0.55, 1.0, directPresence);
+        float legacyShadow = lerp(1.0, max(shadowRatio, gShadowMinVisibility), shadowWeight);
         float legacyAO = lerp(1.0, ao, saturate(gAOLightmapStrength));
 
         float3 legacyColor = baseAlbedo * max(gLightmapStrength, 0.0) *
             saturate(gLegacyBlend) * legacyShadow * legacyAO;
-        float3 rtLitColor = directDiffuse + specularAccum + reflection + gi;
-        finalColor = (legacyColor + rtLitColor) * max(gExposure, 0.001);
+
+        float3 directComposite = CompositeGameplayComponent(directDiffuse, 1.35, 0.42);
+        float3 specularComposite = CompositeGameplayComponent(specularAccum, 1.80, 0.30);
+        float3 reflectionComposite = CompositeGameplayComponent(reflection, 7.00, 0.16);
+        float3 giComposite = CompositeGameplayComponent(gi, 3.50, 0.16);
+        float3 rtLitColor = directComposite + specularComposite + reflectionComposite + giComposite;
+
+        // Add more RT energy in dark/mid-tone areas and progressively protect
+        // bright authored surfaces. HDR guard + tonemap remain the final safety
+        // net, but this headroom term prevents highlight flattening up front.
+        float3 authoredHeadroom = rcp(1.0 + max(legacyColor, 0.0) * 0.70);
+        finalColor = (legacyColor + rtLitColor * authoredHeadroom) * max(gExposure, 0.001);
         finalColor = ApplyRadianceGuard(finalColor);
 
         if (gDebugMode == 1)
@@ -3545,7 +3571,7 @@ static glRaytracingEffectsOptions_t glRaytracingLightingDefaultEffectsOptions(vo
 	o.contactShadows = 1;
 	o.contactShadowLength = 96.0f;
 	o.sunEnabled = 1;
-	o.sunIntensity = 0.28f;
+	o.sunIntensity = 0.30f;
 	o.sunAngularRadius = 0.35f;
 	o.sunSamples = 1;
 	o.sunDirection[0] = -0.45f;
@@ -3559,20 +3585,20 @@ static glRaytracingEffectsOptions_t glRaytracingLightingDefaultEffectsOptions(vo
 	o.dynamicLightsEnabled = 1;
 	o.dynamicLightShadows = 1;
 	o.maxLights = 24;
-	o.dynamicLightIntensityScale = 0.70f;
+	o.dynamicLightIntensityScale = 0.74f;
 	o.dynamicLightRadiusScale = 0.90f;
 	o.aoEnabled = 1;
 	o.aoSamples = 1;
 	o.aoRadius = 24.0f;
-	o.aoStrength = 0.28f;
+	o.aoStrength = 0.30f;
 	o.reflectionsEnabled = 1;
 	o.reflectionSamples = 1;
-	o.reflectionStrength = 0.075f;
+	o.reflectionStrength = 0.10f;
 	o.reflectionMaxDistance = 768.0f;
 	o.reflectionRoughness = 0.35f;
 	o.giEnabled = 1;
 	o.giSamples = 1;
-	o.giStrength = 0.065f;
+	o.giStrength = 0.080f;
 	o.giMaxDistance = 192.0f;
 	o.denoiserEnabled = 1;
 	o.denoiserRadius = 1;
@@ -3580,15 +3606,15 @@ static glRaytracingEffectsOptions_t glRaytracingLightingDefaultEffectsOptions(vo
 	o.denoiserDepthSigma = 160.0f;
 	o.denoiserNormalSigma = 24.0f;
 	o.temporalEnabled = 1;
-	o.temporalWeight = 0.58f;
+	o.temporalWeight = 0.46f;
 	o.temporalClamp = 0.08f;
 	o.temporalResetThreshold = 0.003f;
 	o.skyEnabled = 1;
-	o.skyStrength = 0.16f;
+	o.skyStrength = 0.18f;
 	o.skySamples = 1;
 	o.skyMaxDistance = 8192.0f;
 	o.specularEnabled = 1;
-	o.specularStrength = 0.42f;
+	o.specularStrength = 0.50f;
 	o.specularPower = 64.0f;
 	o.shadowMinVisibility = 0.16f;
 	o.tonemapMode = 2;
@@ -3600,12 +3626,12 @@ static glRaytracingEffectsOptions_t glRaytracingLightingDefaultEffectsOptions(vo
 	o.outputGamma = 1.0f;
 	o.frameIndex = 0;
 	o.debugEffect = 0;
-	o.directLightingStrength = 0.20f;
+	o.directLightingStrength = 0.34f;
 	o.lightmapStrength = 1.00f;
-	o.aoLightmapStrength = 0.22f;
-	o.shadowLightmapStrength = 0.18f;
-	o.radianceClamp = 3.25f;
-	o.highlightCompression = 1.40f;
+	o.aoLightmapStrength = 0.30f;
+	o.shadowLightmapStrength = 0.34f;
+	o.radianceClamp = 2.85f;
+	o.highlightCompression = 1.75f;
 	o.pointLightIntensityCap = 3.50f;
 	o.rectLightIntensityCap = 2.20f;
 	o.lightRadiusMin = 48.0f;
@@ -4239,15 +4265,18 @@ void glRaytracingLightingDebugPrintConstants(void)
 	const glRaytracingLightingConstants_t& c = g_glRaytracingLighting.constants;
 	const glRaytracingEffectsOptions_t& e = c.effects;
 	Com_Printf(
-		"DXR v6.1 CPU CB: sun=%u intensity=%.4f color=(%.3f %.3f %.3f) "
+		"DXR v6.2 CPU CB: sun=%u intensity=%.4f color=(%.3f %.3f %.3f) "
 		"AO=%u strength=%.4f radius=%.2f GI=%u strength=%.4f maxDist=%.2f "
 		"refl=%u strength=%.4f maxDist=%.2f debugEffect=%u dyn=%u "
+		"direct=%.3f lightmap=%.3f aoLM=%.3f shadowLM=%.3f clamp=%.3f "
 		"lightCount=%u selected=%u rejected=%u history=%u\n",
 		e.sunEnabled, e.sunIntensity, e.sunColor[0], e.sunColor[1], e.sunColor[2],
 		e.aoEnabled, e.aoStrength, e.aoRadius,
 		e.giEnabled, e.giStrength, e.giMaxDistance,
 		e.reflectionsEnabled, e.reflectionStrength, e.reflectionMaxDistance,
-		e.debugEffect, e.dynamicLightsEnabled, c.lightCount,
+		e.debugEffect, e.dynamicLightsEnabled,
+		e.directLightingStrength, e.lightmapStrength, e.aoLightmapStrength,
+		e.shadowLightmapStrength, e.radianceClamp, c.lightCount,
 		g_glRaytracingLighting.selectedLightCount,
 		g_glRaytracingLighting.rejectedLightCount,
 		g_glRaytracingLighting.historyValid ? 1u : 0u);

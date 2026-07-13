@@ -54,6 +54,7 @@ try {
 
     Assert-Contains -Root $RepoRoot -Relative 'src/opengl/gl_d3d12raylight.cpp' -Text 'DXR Playable v6 effects constants must stay cbuffer-compatible'
     Assert-Contains -Root $RepoRoot -Relative 'src/opengl/gl_d3d12raylight.cpp' -Text 'glRaytracingLightingSelectLights'
+    Assert-Contains -Root $RepoRoot -Relative 'src/opengl/gl_d3d12raylight.cpp' -Text 'CompositeGameplayComponent'
     Assert-Contains -Root $RepoRoot -Relative 'src/opengl/gl_d3d12raylight.cpp' -Text 'ApplyRadianceGuard'
     Assert-Contains -Root $RepoRoot -Relative 'src/opengl/gl_d3d12raylight.cpp' -Text 'gTemporalPositionThreshold'
     Assert-Contains -Root $RepoRoot -Relative 'src/opengl/opengl.h' -Text 'lightSelectionHysteresis'
@@ -61,7 +62,7 @@ try {
     Assert-Contains -Root $RepoRoot -Relative 'src/renderer/tr_init.cpp' -Text 'r_dxrRadianceClamp = ri.Cvar_Get'
     Assert-Contains -Root $RepoRoot -Relative 'src/renderer/tr_local.h' -Text 'extern cvar_t   *r_dxrTemporalMaxFrames'
 
-    Write-Host 'Playable v6 source installation succeeded.'
+    Write-Host 'Playable v6.2 source installation succeeded.'
 }
 finally {
     Pop-Location
