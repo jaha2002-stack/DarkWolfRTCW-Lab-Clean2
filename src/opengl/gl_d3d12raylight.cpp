@@ -2358,8 +2358,7 @@ float3 ComputeGI(float3 worldPos, float3 N, float3 baseAlbedo, uint2 pixel)
     for (uint i = 0; i < sampleCount; ++i)
     {
         float3 h = CosineSampleHemisphere(Hammersley2D(i, sampleCount, seed));
-)DXRHLSL",
-R"DXRHLSL(        float3 dir = normalize(tangent * h.x + bitangent * h.y + N * h.z);
+        float3 dir = normalize(tangent * h.x + bitangent * h.y + N * h.z);
         float visibility = TraceVisibility(worldPos + N * max(gShadowBias, 0.002), dir, max(gGIMaxDistance, 8.0));
         accum += (SkyColorForDirection(dir) * 0.55 + gAmbientColor.rgb * 0.45) * visibility;
     }
@@ -2372,7 +2371,8 @@ float ComputeCavity(uint2 pixel, float3 worldPos, float3 N)
     {
         int2(-2, 0), int2(2, 0), int2(0, -2), int2(0, 2),
         int2(-2, -2), int2(2, -2), int2(-2, 2), int2(2, 2),
-        int2(-4, 0), int2(4, 0), int2(0, -4), int2(0, 4)
+)DXRHLSL",
+R"DXRHLSL(        int2(-4, 0), int2(4, 0), int2(0, -4), int2(0, 4)
     };
     float accum = 0.0;
     float weightSum = 0.0;
@@ -2397,7 +2397,7 @@ float ComputeCavity(uint2 pixel, float3 worldPos, float3 N)
     return 1.0 - cavity * 0.10;
 }
 
-float3 ComputeSpecular(float3 N, float3 V, float3 L, float3 lightColor, float intensity, float attenuation, float shadow, float3 baseAlbedo)
+float3 ComputeSpecular(float3 N, float3 V, float3 L, float3 lightColor, float intensity, float attenuation, float shadow, float3 baseAlbedo, float surfaceRoughness)
 {
     if (gEnableSpecular == 0 || gSpecularEnabled == 0 || gSpecularStrength <= 0.0)
         return 0.0;
@@ -2408,18 +2408,27 @@ float3 ComputeSpecular(float3 N, float3 V, float3 L, float3 lightColor, float in
     float VdotH = saturate(dot(V, H));
     if (NdotL <= 0.0 || NdotV <= 0.0)
         return 0.0;
-    float power = clamp(gSpecularPower, 2.0, 256.0);
+
+    // The G-buffer stores material roughness in normal.w.  v6.2 incorrectly
+    // reused that channel as a geometry flag and therefore never used the real
+    // roughness for highlights.  Keep glossy surfaces sharp while giving RTCW's
+    // default rough materials a wider, still visible highlight.
+    float roughness = saturate(surfaceRoughness);
+    float smoothness = 1.0 - roughness;
+    float requestedPower = clamp(gSpecularPower, 2.0, 256.0);
+    float power = lerp(6.0, requestedPower, smoothness * smoothness);
     float specPow = pow(NdotH, power);
     float3 dielectricF0 = 0.04;
-    float metalHint = saturate((max(max(baseAlbedo.r, baseAlbedo.g), baseAlbedo.b) - 0.75) * 1.5);
-    float3 F0 = lerp(dielectricF0, baseAlbedo, metalHint);
+    float metalHint = saturate((max(max(baseAlbedo.r, baseAlbedo.g), baseAlbedo.b) - 0.65) * 1.75);
+    float3 F0 = lerp(dielectricF0, max(baseAlbedo, 0.0), metalHint);
     float3 fresnel = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
     float energyNorm = (power + 8.0) * 0.125;
-    return lightColor * (intensity * attenuation * shadow * NdotL) * fresnel * specPow * energyNorm * gSpecularStrength;
+    float roughnessEnergy = lerp(0.40, 1.0, smoothness);
+    return lightColor * (intensity * attenuation * shadow * NdotL) *
+        fresnel * specPow * energyNorm * roughnessEnergy * gSpecularStrength;
 }
 
-)DXRHLSL",
-R"DXRHLSL(float Luminance(float3 color)
+float Luminance(float3 color)
 {
     return dot(color, float3(0.2126, 0.7152, 0.0722));
 }
@@ -2433,19 +2442,13 @@ float3 DebugNormalizePositive(float3 color, float gain)
     return 1.0 - exp2(-color * max(gain, 0.001));
 }
 
-// Playable v6.2: perceptual component mapping for the normal gameplay
-// composite. The RTCW framebuffer is already authored and lightmapped, while
-// the RT components are low-energy radiometric additions. A direct linear add
-// made the verified components nearly invisible at gameplay strengths. This
-// bounded mapping keeps zero exactly zero, preserves component colour, gives
-// the cvar strengths a useful visible range and prevents any single component
-// from turning a room white. DebugEffect modes continue to bypass this path.
-float3 CompositeGameplayComponent(float3 color, float gain, float ceiling)
+// Final v7 restores the exact linear relighting principle that produced the
+// visibly ray-traced Clean Release image.  The stable authored framebuffer is
+// retained as one side of the blend, while the other side contains the full RT
+// lighting result.  There are no hidden component ceilings or headroom masks.
+float3 LegacyVisibleGameplayComposite(float3 authoredColor, float3 rtLit, float legacyBlend)
 {
-    color = max(color, 0.0);
-    float3 mapped = 1.0 - exp2(-color * max(gain, 0.001));
-    float boundedCeiling = max(ceiling, 0.0);
-    return min(mapped, boundedCeiling.xxx);
+    return lerp(max(rtLit, 0.0), max(authoredColor, 0.0), saturate(legacyBlend));
 }
 
 float3 ApplyRadianceGuard(float3 color)
@@ -2540,7 +2543,8 @@ float4 ResolveLabPixel(uint2 pixel)
                 float3 samplePosition = gPositionTex.Load(int3(sp, 0)).xyz;
                 float spatial = exp(-0.5 * (float)(x * x + y * y) / max((float)(radius * radius), 1.0));
                 float depthWeight = exp(-abs(sampleDepth - centerDepth) * max(gDenoiserDepthSigma, 0.0));
-                float normalWeight = pow(saturate(dot(centerNormal, sampleNormal)), max(gDenoiserNormalSigma, 1.0));
+)DXRHLSL",
+R"DXRHLSL(                float normalWeight = pow(saturate(dot(centerNormal, sampleNormal)), max(gDenoiserNormalSigma, 1.0));
                 float positionWeight = exp(-length(samplePosition - centerPosition) * 0.035);
                 float3 delta = sampleResidual - currentResidual;
                 float colorWeight = 1.0 / (1.0 + dot(delta, delta) * 3.0);
@@ -2572,8 +2576,7 @@ float4 ResolveLabPixel(uint2 pixel)
             for (int xx = -1; xx <= 1; ++xx)
             {
                 int2 sp = clamp(int2(pixel) + int2(xx, yy), int2(0, 0), int2((int)gScreenSize.x - 1, (int)gScreenSize.y - 1));
-)DXRHLSL",
-R"DXRHLSL(                float3 neighborRaw = gRawLightingTex.Load(int3(sp, 0)).rgb;
+                float3 neighborRaw = gRawLightingTex.Load(int3(sp, 0)).rgb;
                 minRaw = min(minRaw, neighborRaw);
                 maxRaw = max(maxRaw, neighborRaw);
             }
@@ -2591,8 +2594,7 @@ R"DXRHLSL(                float3 neighborRaw = gRawLightingTex.Load(int3(sp, 0))
     return float4(currentPost, centerSample.a);
 }
 
-)DXRHLSL",
-R"DXRHLSL([shader("raygeneration")]
+[shader("raygeneration")]
 void RayGen()
 {
     uint2 pixel = DispatchRaysIndex().xy;
@@ -2657,20 +2659,30 @@ void RayGen()
         return;
     }
 
-    float3 baseAlbedo = albedoSample.rgb;
-    float3 worldPos = LoadScenePosition(pixel);
+    float3 baseAlbedo = max(albedoSample.rgb, 0.0);
+    float4 positionSample = gPositionTex.Load(int3(pixel, 0));
+    float3 worldPos = positionSample.xyz;
     float4 normalSample = LoadSceneNormal(pixel);
     float3 N = normalize(normalSample.xyz);
     float3 V = normalize(gCameraPos.xyz - worldPos);
-    float geoFlag = normalSample.w;
+
+    // Correct G-buffer layout: position.w is the geometry flag, normal.w is
+    // roughness.  Reading normal.w as a flag was a concrete v6.2 bug.
+    uint geoFlag = (uint)round(max(positionSample.w, 0.0));
+    float surfaceRoughness = saturate(normalSample.w);
 
     float cavity = ComputeCavity(pixel, worldPos, N);
     float microShadow = lerp(0.90, 1.0, cavity);
     float3 albedo = lerp(baseAlbedo, baseAlbedo * cavity, 0.35) * microShadow;
     float ao = ComputeAmbientOcclusion(worldPos, N, pixel);
     float skyVisibility = ComputeSkyVisibility(worldPos, N, pixel);
-    float3 lightingAccum = gAmbientColor.rgb * gAmbientColor.a;
-    float3 lightingUnshadowedAccum = lightingAccum;
+
+    // Ambient/sky must not participate in the shadow ratio.  v6.2 included
+    // them in both numerator and denominator, forcing the ratio toward 1 and
+    // erasing visible shadows from the authored framebuffer.
+    float3 ambientSkyLighting = gAmbientColor.rgb * gAmbientColor.a;
+    float3 directShadowedAccum = 0.0;
+    float3 directUnshadowedAccum = 0.0;
     float3 specularAccum = 0.0;
     float debugShadow = 1.0;
 
@@ -2678,16 +2690,11 @@ void RayGen()
     {
         float upness = saturate(N.z * 0.5 + 0.5);
         float3 classicSkyColor = float3(0.5, 0.5, 0.5) * (0.35 + 0.65 * upness);
-        float3 skyContribution = classicSkyColor * (gSkyStrength * skyVisibility);
-        lightingAccum += skyContribution;
-        lightingUnshadowedAccum += skyContribution;
+        ambientSkyLighting += classicSkyColor * (gSkyStrength * skyVisibility);
     }
 
     if (geoFlag == GEOMETRY_FLAG_SKELETAL)
-    {
-        lightingAccum += 0.15;
-        lightingUnshadowedAccum += 0.15;
-    }
+        ambientSkyLighting += 0.15;
 
     if (gSunEnabled != 0)
     {
@@ -2698,9 +2705,9 @@ void RayGen()
             float shadow = SunShadow(worldPos, N, pixel);
             debugShadow = min(debugShadow, shadow);
             float3 sunContribution = gSunColor.rgb * (gSunIntensity * ndl);
-            lightingUnshadowedAccum += sunContribution;
-            lightingAccum += sunContribution * shadow;
-            specularAccum += ComputeSpecular(N, V, L, gSunColor.rgb, gSunIntensity, 1.0, shadow, baseAlbedo);
+            directUnshadowedAccum += sunContribution;
+            directShadowedAccum += sunContribution * shadow;
+            specularAccum += ComputeSpecular(N, V, L, gSunColor.rgb, gSunIntensity, 1.0, shadow, baseAlbedo, surfaceRoughness);
         }
     }
 
@@ -2721,15 +2728,16 @@ void RayGen()
                 float3 L = toLight / max(dist, 1e-5);
                 float atten = saturate((radius - dist) / radius);
                 atten *= atten;
-                float ndl = saturate((dot(N, L) + 0.35) / 1.35);
+)DXRHLSL",
+R"DXRHLSL(                float ndl = saturate((dot(N, L) + 0.35) / 1.35);
                 float shadow = 1.0;
                 if (ndl > 0.0001 && atten > 0.0)
                     shadow = PointLightShadow(worldPos, N, light, toLight, dist, pixel);
                 debugShadow = min(debugShadow, shadow);
                 float3 pointContribution = light.color * (intensity * atten * ndl);
-                lightingUnshadowedAccum += pointContribution;
-                lightingAccum += pointContribution * shadow;
-                specularAccum += ComputeSpecular(N, V, L, light.color, intensity, atten, shadow, baseAlbedo);
+                directUnshadowedAccum += pointContribution;
+                directShadowedAccum += pointContribution * shadow;
+                specularAccum += ComputeSpecular(N, V, L, light.color, intensity, atten, shadow, baseAlbedo, surfaceRoughness);
             }
             else if (light.type == GL_RAYTRACING_LIGHT_TYPE_RECT)
             {
@@ -2756,36 +2764,48 @@ void RayGen()
                     float ndl = saturate(dot(N, L));
                     float face = (light.twoSided != 0) ? abs(dot(light.normal, -L)) : saturate(dot(light.normal, -L));
                     rectDiffuseAccum += light.color * (intensity * ndl * face);
-                    rectSpecAccum += ComputeSpecular(N, V, L, light.color, intensity * face, 1.0, 1.0, baseAlbedo);
+                    rectSpecAccum += ComputeSpecular(N, V, L, light.color, intensity * face, 1.0, 1.0, baseAlbedo, surfaceRoughness);
                 }
                 rectDiffuseAccum /= (float)lightSamples;
                 rectSpecAccum /= (float)lightSamples;
                 float3 rectContribution = clamp(rectDiffuseAccum * atten, 0.0, max(gRadianceClamp, 1.0));
-                lightingUnshadowedAccum += rectContribution;
-                lightingAccum += rectContribution * shadow;
+                directUnshadowedAccum += rectContribution;
+                directShadowedAccum += rectContribution * shadow;
                 specularAccum += rectSpecAccum * atten * shadow;
             }
         }
     }
 
-)DXRHLSL",
-R"DXRHLSL(    float3 shadowedLighting = lightingAccum;
-    float3 unshadowedLighting = max(lightingUnshadowedAccum, 0.0);
-    lightingAccum *= ao;
-    specularAccum *= lerp(1.0, ao, 0.45);
     if (geoFlag == GEOMETRY_FLAG_SKELETAL)
     {
-        lightingAccum *= 1.05;
-        unshadowedLighting *= 1.05;
+        directShadowedAccum *= 1.05;
+        directUnshadowedAccum *= 1.05;
         specularAccum *= 1.05;
     }
+
+    float directUnshadowedLuma = Luminance(max(directUnshadowedAccum, 0.0));
+    float shadowRatio = (directUnshadowedLuma > 1e-4)
+        ? saturate(Luminance(max(directShadowedAccum, 0.0)) / directUnshadowedLuma)
+        : 1.0;
+
+    // Keep the proven Clean Release behavior: RT shadows remain inside the
+    // relit branch instead of being divided out or hidden by ambient light.
+    // The two legacy-named controls now strengthen the RT shadow and AO result
+    // without modifying the stable authored base used by the denoiser.
+    float visibleShadow = lerp(
+        1.0,
+        max(shadowRatio, saturate(gShadowMinVisibility)),
+        saturate(gShadowLightmapStrength));
+    float visibleAO = lerp(1.0, ao, saturate(gAOLightmapStrength));
+
+    float3 lightingAccum = ambientSkyLighting +
+        directShadowedAccum * max(gDirectLightingStrength, 0.0) * visibleShadow;
+    lightingAccum *= visibleAO;
+    specularAccum *= lerp(1.0, visibleAO, 0.50);
+
     float3 reflection = ComputeReflection(worldPos, N, V, pixel);
     float3 gi = ComputeGI(worldPos, N, baseAlbedo, pixel);
-
-    float shadowedLuma = Luminance(max(shadowedLighting, 0.0));
-    float unshadowedLuma = max(Luminance(unshadowedLighting), 1e-4);
-    float shadowRatio = saturate(shadowedLuma / unshadowedLuma);
-    float3 directDiffuse = albedo * lightingAccum * max(gDirectLightingStrength, 0.0);
+    float3 directDiffuse = albedo * lightingAccum;
 
     // Direct component diagnostics. These outputs are returned immediately and
     // never enter spatial/temporal filtering, HDR limiting, bloom, tonemap or
@@ -2818,37 +2838,23 @@ R"DXRHLSL(    float3 shadowedLighting = lightingAccum;
     }
     else
     {
-        // Playable v6.2 verified gameplay composite. The direct, reflection,
-        // GI and specular channels were proven valid by v6.1 modes 3/4/5/6/7/8.
-        // Mix them into the authored RTCW scene with bounded perceptual lifts:
-        // visible in normal play, independently switchable, and protected from
-        // the white-room failure seen in the earlier diagnostic light tests.
-        float directPresence = saturate(unshadowedLuma * 0.55);
-        float shadowWeight = saturate(gShadowLightmapStrength) * lerp(0.55, 1.0, directPresence);
-        float legacyShadow = lerp(1.0, max(shadowRatio, gShadowMinVisibility), shadowWeight);
-        float legacyAO = lerp(1.0, ao, saturate(gAOLightmapStrength));
-
-        float3 legacyColor = baseAlbedo * max(gLightmapStrength, 0.0) *
-            saturate(gLegacyBlend) * legacyShadow * legacyAO;
-
-        float3 directComposite = CompositeGameplayComponent(directDiffuse, 1.35, 0.42);
-        float3 specularComposite = CompositeGameplayComponent(specularAccum, 1.80, 0.30);
-        float3 reflectionComposite = CompositeGameplayComponent(reflection, 7.00, 0.16);
-        float3 giComposite = CompositeGameplayComponent(gi, 3.50, 0.16);
-        float3 rtLitColor = directComposite + specularComposite + reflectionComposite + giComposite;
-
-        // Add more RT energy in dark/mid-tone areas and progressively protect
-        // bright authored surfaces. HDR guard + tonemap remain the final safety
-        // net, but this headroom term prevents highlight flattening up front.
-        float3 authoredHeadroom = rcp(1.0 + max(legacyColor, 0.0) * 0.70);
-        finalColor = (legacyColor + rtLitColor * authoredHeadroom) * max(gExposure, 0.001);
+        // Final v7 gameplay composite.  This is deliberately the same simple
+        // and visible A/B model as the successful Clean Release path: the RT
+        // branch contains ambient, sky, real map lights, RT shadows, AO,
+        // specular, reflections and GI; the authored branch preserves RTCW.
+        float3 authoredColor = baseAlbedo * max(gLightmapStrength, 0.0);
+        float3 rtLitColor = directDiffuse + specularAccum + reflection + gi;
+        rtLitColor = max(rtLitColor, authoredColor * 0.15);
+        finalColor = LegacyVisibleGameplayComposite(
+            authoredColor,
+            rtLitColor,
+            gLegacyBlend) * max(gExposure, 0.001);
         finalColor = ApplyRadianceGuard(finalColor);
 
         if (gDebugMode == 1)
             finalColor = rtLitColor;
         else if (gDebugMode == 2)
-)DXRHLSL",
-R"DXRHLSL(            finalColor = (ao * skyVisibility).xxx;
+            finalColor = (ao * skyVisibility).xxx;
         else if (gDebugMode == 3)
             finalColor = baseAlbedo;
         else if (gDebugMode == 4)
@@ -3125,7 +3131,7 @@ static glRaytracingLight_t glRaytracingNormalizeLight(
 		// BSP emissive stages often store old light compiler values in the
 		// hundreds.  Convert that legacy range logarithmically into a bounded
 		// real-time radiance range instead of feeding it directly to HDR output.
-		const float normalized = log2f(1.0f + rawIntensity) * 0.27f;
+		const float normalized = log2f(1.0f + rawIntensity) * 0.55f;
 		light.intensity = glRaytracingClamp(normalized, 0.0f, std::max(effects.rectLightIntensityCap, 0.0f));
 		const uint32_t sampleCap = glRaytracingClamp<uint32_t>(effects.shadowSamples, 1u, 2u);
 		light.samples = glRaytracingClamp<uint32_t>(light.samples ? light.samples : 1u, 1u, sampleCap);
@@ -3626,14 +3632,14 @@ static glRaytracingEffectsOptions_t glRaytracingLightingDefaultEffectsOptions(vo
 	o.outputGamma = 1.0f;
 	o.frameIndex = 0;
 	o.debugEffect = 0;
-	o.directLightingStrength = 0.34f;
+	o.directLightingStrength = 1.00f;
 	o.lightmapStrength = 1.00f;
 	o.aoLightmapStrength = 0.30f;
 	o.shadowLightmapStrength = 0.34f;
 	o.radianceClamp = 2.85f;
 	o.highlightCompression = 1.75f;
-	o.pointLightIntensityCap = 3.50f;
-	o.rectLightIntensityCap = 2.20f;
+	o.pointLightIntensityCap = 8.00f;
+	o.rectLightIntensityCap = 4.50f;
 	o.lightRadiusMin = 48.0f;
 	o.lightRadiusMax = 2048.0f;
 	o.lightSelectionHysteresis = 0.18f;
@@ -3678,13 +3684,13 @@ bool glRaytracingLightingInit(void)
 	g_glRaytracingLighting.constants.ambientColor[0] = 0.08f;
 	g_glRaytracingLighting.constants.ambientColor[1] = 0.08f;
 	g_glRaytracingLighting.constants.ambientColor[2] = 0.09f;
-	g_glRaytracingLighting.constants.ambientColor[3] = 1.0f;
+	g_glRaytracingLighting.constants.ambientColor[3] = 1.15f;
 	g_glRaytracingLighting.constants.enableSpecular = 1;
 	g_glRaytracingLighting.constants.enableHalfLambert = 1;
 	g_glRaytracingLighting.constants.normalReconstructZ = 1.0f;
 	g_glRaytracingLighting.constants.shadowBias = 0.075f;
-	g_glRaytracingLighting.constants.exposure = 0.92f;
-	g_glRaytracingLighting.constants.legacyBlend = 0.88f;
+	g_glRaytracingLighting.constants.exposure = 1.0f;
+	g_glRaytracingLighting.constants.legacyBlend = 0.55f;
 	g_glRaytracingLighting.constants.debugMode = 0u;
 	g_glRaytracingLighting.constants.effects = glRaytracingLightingDefaultEffectsOptions();
 	g_glRaytracingLighting.historyValid = 0;
@@ -4265,7 +4271,7 @@ void glRaytracingLightingDebugPrintConstants(void)
 	const glRaytracingLightingConstants_t& c = g_glRaytracingLighting.constants;
 	const glRaytracingEffectsOptions_t& e = c.effects;
 	Com_Printf(
-		"DXR v6.2 CPU CB: sun=%u intensity=%.4f color=(%.3f %.3f %.3f) "
+		"DXR v7 CPU CB: composite=clean-release-visible sun=%u intensity=%.4f color=(%.3f %.3f %.3f) "
 		"AO=%u strength=%.4f radius=%.2f GI=%u strength=%.4f maxDist=%.2f "
 		"refl=%u strength=%.4f maxDist=%.2f debugEffect=%u dyn=%u "
 		"direct=%.3f lightmap=%.3f aoLM=%.3f shadowLM=%.3f clamp=%.3f "

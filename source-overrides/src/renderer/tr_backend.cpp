@@ -1129,11 +1129,10 @@ static qboolean RB_DXRShouldRenderLighting(void)
 
 static void RB_AddDXRFallbackLightIfNeeded(void)
 {
-	// The camera-attached fallback light is a diagnostics-only tool.  It must
-	// never enter a normal gameplay profile because it moves with the camera
-	// and creates the extreme exposure pumping seen in the v5 tests.
-	if (!r_dxrFallbackLight || !r_dxrFallbackLight->integer ||
-		!r_dxrDebug || !r_dxrDebug->integer)
+	// The original Clean Release image used this warm camera-side fill light.
+	// It is now strictly opt-in through r_dxrFallbackLight: normal real-light
+	// profiles keep it at 0, while the screenshot-look profile enables it.
+	if (!r_dxrFallbackLight || !r_dxrFallbackLight->integer)
 	{
 		return;
 	}
@@ -1249,14 +1248,14 @@ static glRaytracingEffectsOptions_t RB_BuildDXREffectsOptions(void)
 
 	// Playable v6 component mixer and stability guardrails.  Every value is
 	// runtime-switchable from the console; none of these cvars is latched.
-	o.directLightingStrength = r_dxrDirectLightingStrength ? r_dxrDirectLightingStrength->value : 0.20f;
+	o.directLightingStrength = r_dxrDirectLightingStrength ? r_dxrDirectLightingStrength->value : 1.00f;
 	o.lightmapStrength = r_dxrLightmapStrength ? r_dxrLightmapStrength->value : 1.00f;
 	o.aoLightmapStrength = r_dxrAOLightmapStrength ? r_dxrAOLightmapStrength->value : 0.22f;
 	o.shadowLightmapStrength = r_dxrShadowLightmapStrength ? r_dxrShadowLightmapStrength->value : 0.18f;
 	o.radianceClamp = r_dxrRadianceClamp ? r_dxrRadianceClamp->value : 3.25f;
 	o.highlightCompression = r_dxrHighlightCompression ? r_dxrHighlightCompression->value : 1.40f;
-	o.pointLightIntensityCap = r_dxrPointLightIntensityCap ? r_dxrPointLightIntensityCap->value : 3.50f;
-	o.rectLightIntensityCap = r_dxrRectLightIntensityCap ? r_dxrRectLightIntensityCap->value : 2.20f;
+	o.pointLightIntensityCap = r_dxrPointLightIntensityCap ? r_dxrPointLightIntensityCap->value : 8.00f;
+	o.rectLightIntensityCap = r_dxrRectLightIntensityCap ? r_dxrRectLightIntensityCap->value : 4.50f;
 	o.lightRadiusMin = r_dxrLightRadiusMin ? r_dxrLightRadiusMin->value : 48.0f;
 	o.lightRadiusMax = r_dxrLightRadiusMax ? r_dxrLightRadiusMax->value : 2048.0f;
 	o.lightSelectionHysteresis = r_dxrLightSelectionHysteresis ? r_dxrLightSelectionHysteresis->value : 0.18f;
@@ -1305,7 +1304,7 @@ static void RB_RunRaytracedLightingPass(void)
 	}
 	else
 	{
-		glRaytracingLightingSetAmbient(0.14f, 0.14f, 0.16f, 0.85f);
+		glRaytracingLightingSetAmbient(0.14f, 0.14f, 0.16f, 1.20f);
 	}
 
 	if (r_dxrExposure)
@@ -1314,7 +1313,7 @@ static void RB_RunRaytracedLightingPass(void)
 	}
 	else
 	{
-		glRaytracingLightingSetExposure(0.92f);
+		glRaytracingLightingSetExposure(1.05f);
 	}
 
 	if (r_dxrLegacyBlend)
@@ -1323,7 +1322,7 @@ static void RB_RunRaytracedLightingPass(void)
 	}
 	else
 	{
-		glRaytracingLightingSetLegacyBlend(0.88f);
+		glRaytracingLightingSetLegacyBlend(0.60f);
 	}
 
 	if (r_dxrDebugMode)
@@ -1345,7 +1344,7 @@ static void RB_RunRaytracedLightingPass(void)
 			s_lastDXRDebugPrintTime = now;
 			printDXRDebugConstants = qtrue;
 			ri.Printf(PRINT_ALL,
-				"DXR v6: meshes=%u instances=%u lights=%u selected=%u rejected=%u fallback=%d radius=%.1f intensity=%.2f bias=%.4f ambient=%.2f legacy=%.2f exposure=%.2f debugMode=%d\n",
+				"DXR v7: meshes=%u instances=%u lights=%u selected=%u rejected=%u fallback=%d radius=%.1f intensity=%.2f bias=%.4f ambient=%.2f legacy=%.2f exposure=%.2f debugMode=%d\n",
 				glRaytracingGetMeshCount(),
 				glRaytracingGetInstanceCount(),
 				glRaytracingLightingGetLightCount(),
