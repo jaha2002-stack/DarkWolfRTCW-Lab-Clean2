@@ -1,0 +1,66 @@
+name: DarkWolf RTCW RT Final Stable Visible v7
+
+on:
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: Build configuration
+        required: true
+        default: Release
+        type: choice
+        options: [Release, Debug]
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install deterministic v7 source snapshots
+        shell: pwsh
+        run: ./scripts/apply-darkwolf-rt-final-v7.ps1
+
+      - name: Verify v7 source and profiles
+        shell: pwsh
+        run: ./scripts/verify-darkwolf-rt-final-v7.ps1
+
+      - name: Compile-check embedded v7 HLSL
+        shell: pwsh
+        run: ./scripts/validate-darkwolf-rt-final-v7-hlsl.ps1
+
+      - name: Build Windows runtime
+        shell: pwsh
+        run: ./scripts/build-windows-clean-release.ps1 -Configuration '${{ inputs.configuration }}'
+
+      - name: Package v7 profiles
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist/main -Force | Out-Null
+          $bats = @(
+            'RUN_RT_V7_FINAL_STABLE.bat',
+            'RUN_RT_V7_SCREENSHOT_LOOK.bat',
+            'RUN_RT_V7_REAL_LIGHTS_ONLY.bat',
+            'RUN_RT_V7_DEBUG.bat',
+            'VERIFY_RT_V7_INSTALL.bat'
+          )
+          foreach ($bat in $bats) { Copy-Item (Join-Path 'test-bats' $bat) dist/ -Force }
+          Get-ChildItem main -Filter 'dxr_v7_*.cfg' -File | ForEach-Object { Copy-Item $_.FullName dist/main/ -Force }
+          Copy-Item README_DARKWOLF_RT_FINAL_V7_RU.md dist/ -Force
+          Copy-Item ANALYSIS_CLEAN_RELEASE_KIT_V7_RU.md dist/ -Force
+
+      - name: Show packaged files
+        shell: pwsh
+        run: Get-ChildItem -Path dist -Recurse | Format-Table FullName, Length
+
+      - name: Upload v7 runtime artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DarkWolfRTCW-RT-Final-Stable-Visible-v7-${{ inputs.configuration }}
+          path: dist/**
+          if-no-files-found: error
